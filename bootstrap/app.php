@@ -38,6 +38,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Sanctum configuration
         $middleware->statefulApi();
     })
+    ->withCommands([
+    \App\Console\Commands\InterestRateFrequencyCommand::class,
+])
     ->withExceptions(function (Exceptions $exceptions) {
         //
     })->create();
