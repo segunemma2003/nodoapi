@@ -63,9 +63,7 @@ class AdminController extends Controller
             'payment_stats' => [
                 'total_payments' => $payments->count(),
                 'pending_payments' => $payments->where('status', 'pending')->count(),
-                // 'confirmed_payments' => Payment::whereHas('purchaseOrder', function($query) use ($businessId) {
-                //             $query->where('business_id', $businessId);
-                //         })->where('payments.status', 'confirmed')->count(),
+                'confirmed_payments' => $payments->where('status', 'confirmed')->count(),
                 'rejected_payments' => $payments->where('status', 'rejected')->count(),
                 'total_payment_value' => $payments->where('status', 'confirmed')->sum('amount'),
                 'pending_payment_value' => $payments->where('status', 'pending')->sum('amount'),
@@ -1275,9 +1273,7 @@ public function getPaymentHistory(Request $request)
         'data' => $payments,
         'summary' => [
             'total_payments' => Payment::count(),
-        //    'confirmed_payments' => Payment::whereHas('purchaseOrder', function($query) use ($businessId) {
-        //     $query->where('business_id', $businessId);
-        // })->where('payments.status', 'confirmed')->count(),
+            'confirmed_payments' => Payment::where('status', 'confirmed')->count(),
             'pending_payments' => Payment::where('status', 'pending')->count(),
             'rejected_payments' => Payment::where('status', 'rejected')->count(),
             'total_confirmed_value' => Payment::where('status', 'confirmed')->sum('amount'),
@@ -1620,31 +1616,31 @@ public function getBusinessesEnhanced(Request $request)
             $lastActivity = $business->updated_at;
         }
 
-        $business->enhanced_metrics = [
-            'current_balance' => $business->current_balance,
-            'available_balance' => $business->available_balance,
-            'credit_balance' => $business->credit_balance,
-            'credit_utilization' => $business->getCreditUtilization(),
-            'spending_power_utilization' => $business->getSpendingPowerUtilization(),
-            'payment_score' => $business->getPaymentScore(),
-            'total_pos' => $totalPOs,
-            'pending_pos' => $business->purchaseOrders()
-                ->where('purchase_orders.status', 'pending') // Qualified column name
-                ->count(),
-            'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
-            'pending_payments' => $business->directPayments()
-                ->where('payments.status', 'pending') // Qualified column name
-                ->count(),
-            'total_spent' => $business->purchaseOrders()->sum('net_amount'),
-            'total_repaid' => $business->directPayments()
-                ->where('payments.status', 'confirmed') // Qualified column name
-                ->sum('amount'),
-            'last_activity' => $lastActivity?->format('Y-m-d'),
-            'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
-            'effective_interest_rate' => $business->getEffectiveInterestRate(),
-            'potential_monthly_interest' => $business->calculatePotentialInterest(30),
-            'risk_level' => $this->calculateRiskLevel($business),
-        ];
+        // $business->enhanced_metrics = [
+        //     'current_balance' => $business->current_balance,
+        //     'available_balance' => $business->available_balance,
+        //     'credit_balance' => $business->credit_balance,
+        //     'credit_utilization' => $business->getCreditUtilization(),
+        //     'spending_power_utilization' => $business->getSpendingPowerUtilization(),
+        //     'payment_score' => $business->getPaymentScore(),
+        //     'total_pos' => $totalPOs,
+        //     'pending_pos' => $business->purchaseOrders()
+        //         ->where('purchase_orders.status', 'pending') // Qualified column name
+        //         ->count(),
+        //     'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
+        //     'pending_payments' => $business->directPayments()
+        //         ->where('payments.status', 'pending') // Qualified column name
+        //         ->count(),
+        //     'total_spent' => $business->purchaseOrders()->sum('net_amount'),
+        //     'total_repaid' => $business->directPayments()
+        //         ->where('payments.status', 'confirmed') // Qualified column name
+        //         ->sum('amount'),
+        //     'last_activity' => $lastActivity?->format('Y-m-d'),
+        //     'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
+        //     'effective_interest_rate' => $business->getEffectiveInterestRate(),
+        //     'potential_monthly_interest' => $business->calculatePotentialInterest(30),
+        //     'risk_level' => $this->calculateRiskLevel($business),
+        // ];
 
         return $business;
     });
