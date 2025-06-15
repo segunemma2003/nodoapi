@@ -11,6 +11,8 @@ use App\Models\SystemSetting;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
@@ -1036,5 +1038,295 @@ public function getPurchaseTrends(Request $request)
             ]
         ]
     ]);
+}
+
+
+
+/**
+ * @OA\Get(
+ *     path="/api/business/profile",
+ *     summary="Get business profile information",
+ *     tags={"Business"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Business profile retrieved")
+ * )
+ */
+public function getProfile()
+{
+    $business = Auth::user();
+    if(!$business || !($business instanceof Business)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
+    }
+
+    $business->load(['riskTier', 'createdBy']);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Business profile retrieved successfully',
+        'data' => [
+            'business_info' => [
+                'id' => $business->id,
+                'name' => $business->name,
+                'email' => $business->email, // Read-only for security
+                'phone' => $business->phone,
+                'address' => $business->address,
+                'business_type' => $business->business_type,
+                'registration_number' => $business->registration_number,
+                'is_active' => $business->is_active,
+                'created_at' => $business->created_at,
+                'last_login_at' => $business->last_login_at,
+            ],
+            'account_status' => [
+                'risk_tier' => $business->riskTier?->tier_name ?? 'Standard',
+                'account_age_days' => $business->created_at->diffInDays(now()),
+                'last_activity' => $business->getDaysSinceLastActivity(),
+                'created_by' => $business->createdBy?->name ?? 'System',
+            ],
+            'financial_summary' => [
+                'total_assigned_credit' => $business->getTotalAssignedCredit(),
+                'available_spending_power' => $business->getAvailableSpendingPower(),
+                'outstanding_debt' => $business->getOutstandingDebt(),
+                'credit_utilization' => $business->getCreditUtilization(),
+                'payment_score' => $business->getPaymentScore(),
+            ],
+            'activity_summary' => $business->getActivitySummary(30),
+        ]
+    ]);
+}
+
+/**
+ * @OA\Put(
+ *     path="/api/business/profile",
+ *     summary="Update business profile information",
+ *     tags={"Business"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\RequestBody(
+ *         required=true,
+ *         @OA\JsonContent(
+ *             @OA\Property(property="name", type="string", maxLength=255),
+ *             @OA\Property(property="phone", type="string", maxLength=20),
+ *             @OA\Property(property="address", type="string"),
+ *             @OA\Property(property="business_type", type="string", maxLength=100)
+ *         )
+ *     ),
+ *     @OA\Response(response=200, description="Business profile updated")
+ * )
+ */
+public function updateProfile(Request $request)
+{
+    $business = Auth::user();
+    if(!$business || !($business instanceof Business)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
+    }
+
+    $request->validate([
+        'name' => 'string|max:255',
+        'phone' => 'nullable|string|max:20|regex:/^[\+\-\(\)\s\d]+$/',
+        'address' => 'nullable|string|max:500',
+        'business_type' => 'nullable|string|max:100',
+        'registration_number' => 'nullable|string|max:50|unique:businesses,registration_number,' . $business->id,
+    ]);
+
+    // Track changes for audit
+    $originalData = $business->only(['name', 'phone', 'address', 'business_type', 'registration_number']);
+    $changedFields = [];
+
+    DB::beginTransaction();
+    try {
+        // Update only provided fields
+        $updateData = array_filter($request->only(['name', 'phone', 'address', 'business_type', 'registration_number']),
+            function($value) { return !is_null($value); });
+
+        // Track what changed
+        foreach ($updateData as $field => $newValue) {
+            if ($business->$field !== $newValue) {
+                $changedFields[$field] = [
+                    'old' => $business->$field,
+                    'new' => $newValue
+                ];
+            }
+        }
+
+        if (empty($changedFields)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No changes detected in the submitted data'
+            ], 400);
+        }
+
+        $business->update($updateData);
+
+        // Log the profile update
+        Log::info('Business profile updated', [
+            'business_id' => $business->id,
+            'business_name' => $business->name,
+            'changed_fields' => $changedFields,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Business profile updated successfully',
+            'data' => [
+                'business' => $business->fresh(['riskTier', 'createdBy']),
+                'changes_made' => [
+                    'fields_updated' => array_keys($changedFields),
+                    'total_changes' => count($changedFields),
+                    'changed_fields' => $changedFields,
+                ],
+                'security_notice' => 'Profile changes have been logged for security purposes'
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to update business profile',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * @OA\Post(
+ *     path="/api/business/profile/upload-logo",
+ *     summary="Upload business logo",
+ *     tags={"Business"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\RequestBody(
+ *         required=true,
+ *         @OA\MediaType(
+ *             mediaType="multipart/form-data",
+ *             @OA\Schema(
+ *                 @OA\Property(property="logo", type="string", format="binary")
+ *             )
+ *         )
+ *     ),
+ *     @OA\Response(response=200, description="Logo uploaded successfully")
+ * )
+ */
+public function uploadLogo(Request $request)
+{
+    $business = Auth::user();
+    if(!$business || !($business instanceof Business)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
+    }
+
+    $request->validate([
+        'logo' => 'required|image|mimes:jpeg,jpg,png,gif,svg|max:2048', // 2MB max
+    ]);
+
+    DB::beginTransaction();
+    try {
+        // Delete old logo if exists
+        if ($business->logo_path && Storage::disk('public')->exists($business->logo_path)) {
+            Storage::disk('public')->delete($business->logo_path);
+        }
+
+        // Store new logo
+        $logoPath = $request->file('logo')->store('business_logos', 'public');
+
+        $business->update(['logo_path' => $logoPath]);
+
+        // Log the logo upload
+        Log::info('Business logo uploaded', [
+            'business_id' => $business->id,
+            'business_name' => $business->name,
+            'logo_path' => $logoPath,
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Business logo uploaded successfully',
+            'data' => [
+                'logo_path' => $logoPath,
+                'logo_url' => asset('storage/' . $logoPath),
+                'file_size' => $request->file('logo')->getSize(),
+                'file_type' => $request->file('logo')->getMimeType(),
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to upload logo',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Get specific purchase order for business
+ */
+public function getPurchaseOrder(PurchaseOrder $po)
+{
+    $business = Auth::user();
+    if(!$business || !($business instanceof Business)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
+    }
+
+    // Verify PO belongs to business
+    if ($po->business_id !== $business->id) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Purchase order not found or access denied'
+        ], 404);
+    }
+
+    $po->load(['vendor', 'payments.confirmedBy', 'payments.rejectedBy']);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Purchase order retrieved successfully',
+        'data' => [
+            'purchase_order' => $po,
+            'calculated_metrics' => [
+                'days_since_order' => $po->getDaysSinceOrder(),
+                'is_overdue' => $po->isOverdue(),
+                'days_overdue' => $po->getDaysOverdue(),
+                'payment_progress' => $po->getPaymentProgress(),
+                'urgency_level' => $po->getUrgencyLevel(),
+            ],
+            'payment_suggestions' => $po->getPaymentSuggestions(),
+        ]
+    ]);
+}
+
+/**
+ * Download payment receipt
+ */
+public function downloadReceipt(Payment $payment)
+{
+    $business = Auth::user();
+
+    // Check authorization
+    if(!$business || !($business instanceof Business) || $payment->business_id !== $business->id) {
+        abort(403, 'Unauthorized access to receipt');
+    }
+
+    if (!$payment->receipt_path || !Storage::disk('private')->exists($payment->receipt_path)) {
+        abort(404, 'Receipt file not found');
+    }
+
+    return Storage::disk('private')->download($payment->receipt_path, 'receipt_' . $payment->payment_reference . '.pdf');
 }
 }

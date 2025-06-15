@@ -133,6 +133,14 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     // System settings
     Route::get('platform-summary', [AdminController::class, 'getPlatformSummary']);
+
+    Route::prefix('system-settings')->group(function () {
+        Route::get('/', [AdminInterestRateController::class, 'getSystemSettings']);
+        Route::put('/', [AdminInterestRateController::class, 'updateSystemSettings']);
+    });
+
+
+
 });
 
 // Business routes
@@ -193,4 +201,14 @@ Route::prefix('public')->group(function () {
 // FILE DOWNLOAD ROUTES (protected)
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('payments/{payment}/receipt', [BusinessController::class, 'downloadReceipt'])->name('payments.receipt');
+});
+
+
+Route::get('/test', function () {
+    return response()->json([
+        'success' => true,
+        'message' => 'API is working!',
+        'timestamp' => now(),
+        'app_url' => config('app.url')
+    ]);
 });

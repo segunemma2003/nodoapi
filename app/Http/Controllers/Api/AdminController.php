@@ -1508,4 +1508,131 @@ private function calculateRiskLevel(Business $business)
         return 'low';
     }
 }
+
+/**
+ * @OA\Get(
+ *     path="/api/admin/profile",
+ *     summary="Get admin profile information",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Admin profile retrieved")
+ * )
+ */
+public function getAdminProfile()
+{
+    $admin = Auth::user();
+
+    if(!$admin || !($admin instanceof User) || !$admin->isAdmin()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Admin access required'
+        ], 403);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Admin profile retrieved successfully',
+        'data' => [
+            'admin_info' => [
+                'id' => $admin->id,
+                'name' => $admin->name,
+                'email' => $admin->email,
+                'role' => $admin->role,
+                'user_type' => $admin->user_type,
+                'is_active' => $admin->is_active,
+                'created_at' => $admin->created_at,
+            ],
+            'work_summary' => [
+                'businesses_created' => $admin->createdBusinesses()->count(),
+                'purchase_orders_approved' => $admin->approvedPurchaseOrders()->count(),
+                'payments_processed' => Payment::where('confirmed_by', $admin->id)->count(),
+                'support_performance' => $admin->getSupportPerformanceMetrics(30),
+            ],
+            'recent_activity' => [
+                'last_business_created' => $admin->createdBusinesses()->latest()->first()?->created_at,
+                'last_payment_approved' => Payment::where('confirmed_by', $admin->id)->latest('confirmed_at')->first()?->confirmed_at,
+                'last_po_approved' => $admin->approvedPurchaseOrders()->latest('approved_at')->first()?->approved_at,
+            ]
+        ]
+    ]);
+}
+
+/**
+ * @OA\Put(
+ *     path="/api/admin/profile",
+ *     summary="Update admin profile information",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Admin profile updated")
+ * )
+ */
+public function updateAdminProfile(Request $request)
+{
+    $admin = Auth::user();
+    if(!$admin || !($admin instanceof User) || !$admin->isAdmin()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Admin access required'
+        ], 403);
+    }
+
+    $request->validate([
+        'name' => 'string|max:255',
+        'email' => 'email|unique:users,email,' . $admin->id,
+    ]);
+
+    // Track changes
+    $originalData = $admin->only(['name', 'email']);
+    $changedFields = [];
+
+    DB::beginTransaction();
+    try {
+        $updateData = array_filter($request->only(['name', 'email']),
+            function($value) { return !is_null($value); });
+
+        foreach ($updateData as $field => $newValue) {
+            if ($admin->$field !== $newValue) {
+                $changedFields[$field] = [
+                    'old' => $admin->$field,
+                    'new' => $newValue
+                ];
+            }
+        }
+
+        if (empty($changedFields)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No changes detected'
+            ], 400);
+        }
+
+        $admin->update($updateData);
+
+        // Log the update
+        Log::info('Admin profile updated', [
+            'admin_id' => $admin->id,
+            'admin_name' => $admin->name,
+            'changed_fields' => $changedFields,
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Admin profile updated successfully',
+            'data' => [
+                'admin' => $admin->fresh(),
+                'changes_made' => $changedFields,
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to update admin profile',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
 }
