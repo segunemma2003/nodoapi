@@ -1622,24 +1622,24 @@ public function getBusinessesEnhanced(Request $request)
             'credit_balance' => $business->credit_balance,
             'credit_utilization' => $business->getCreditUtilization(),
             'spending_power_utilization' => $business->getSpendingPowerUtilization(),
-            // 'payment_score' => $business->getPaymentScore(),
+            'payment_score' => $business->getPaymentScore(),
             'total_pos' => $totalPOs,
-            'pending_pos' => $business->purchaseOrders()
-                ->where('purchase_orders.status', 'pending') // Qualified column name
-                ->count(),
-            'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
-            // 'pending_payments' => $business->directPayments()
-            //     ->where('payments.status', 'pending') // Qualified column name
-            //     ->count(),
-            'total_spent' => $business->purchaseOrders()->sum('net_amount'),
+        //     'pending_pos' => $business->purchaseOrders()
+        //         ->where('purchase_orders.status', 'pending') // Qualified column name
+        //         ->count(),
+        //     'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
+        //     'pending_payments' => $business->directPayments()
+        //         ->where('payments.status', 'pending') // Qualified column name
+        //         ->count(),
+        //     'total_spent' => $business->purchaseOrders()->sum('net_amount'),
         //     'total_repaid' => $business->directPayments()
         //         ->where('payments.status', 'confirmed') // Qualified column name
         //         ->sum('amount'),
-            'last_activity' => $lastActivity?->format('Y-m-d'),
-            'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
-            'effective_interest_rate' => $business->getEffectiveInterestRate(),
-            'potential_monthly_interest' => $business->calculatePotentialInterest(30),
-            'risk_level' => $this->calculateRiskLevel($business),
+        //     'last_activity' => $lastActivity?->format('Y-m-d'),
+        //     'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
+        //     'effective_interest_rate' => $business->getEffectiveInterestRate(),
+        //     'potential_monthly_interest' => $business->calculatePotentialInterest(30),
+        //     'risk_level' => $this->calculateRiskLevel($business),
         ];
 
         return $business;

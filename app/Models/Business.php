@@ -595,20 +595,22 @@ public function payments()
      * ===========================
      */
     public function getPaymentScore()
-    {
-        $totalPayments = $this->payments()->where('status', 'confirmed')->count();
+{
+    // Use directPayments() to avoid join ambiguity
+    $totalPayments = $this->directPayments()->where('payments.status', 'confirmed')->count();
 
-        if ($totalPayments === 0) return 0;
+    if ($totalPayments === 0) return 0;
 
-        $onTimePayments = $this->payments()
-            ->where('status', 'confirmed')
-            ->whereHas('purchaseOrder', function($query) {
-                $query->whereRaw('payments.confirmed_at <= purchase_orders.due_date');
-            })
-            ->count();
+    // Count on-time payments using explicit table names
+    $onTimePayments = $this->directPayments()
+        ->where('payments.status', 'confirmed')
+        ->whereHas('purchaseOrder', function($query) {
+            $query->whereRaw('payments.confirmed_at <= purchase_orders.due_date');
+        })
+        ->count();
 
-        return round(($onTimePayments / $totalPayments) * 100, 2);
-    }
+    return round(($onTimePayments / $totalPayments) * 100, 2);
+}
 public function confirmedPayments()
 {
     return $this->hasManyThrough(Payment::class, PurchaseOrder::class)
