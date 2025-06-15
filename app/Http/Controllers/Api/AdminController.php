@@ -1620,7 +1620,7 @@ public function getBusinessesEnhanced(Request $request)
             'current_balance' => $business->current_balance,
             'available_balance' => $business->available_balance,
             'credit_balance' => $business->credit_balance,
-        //     'credit_utilization' => $business->getCreditUtilization(),
+            'credit_utilization' => $business->getCreditUtilization(),
         //     'spending_power_utilization' => $business->getSpendingPowerUtilization(),
         //     'payment_score' => $business->getPaymentScore(),
         //     'total_pos' => $totalPOs,
