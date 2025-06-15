@@ -17,6 +17,7 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->string('phone')->nullable();
             $table->text('address')->nullable();
+            $table->text('logo_path')->nullable();
             $table->string('business_type')->nullable();
             $table->string('registration_number')->unique()->nullable();
             $table->timestamp('email_verified_at')->nullable();

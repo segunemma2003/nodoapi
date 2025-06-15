@@ -763,4 +763,278 @@ class BusinessController extends Controller
             ]
         ]);
     }
+
+
+
+/**
+ * @OA\Get(
+ *     path="/api/business/purchase-tracker",
+ *     summary="Get purchase order analytics and spending insights",
+ *     tags={"Business"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Purchase tracker data retrieved")
+ * )
+ */
+public function getPurchaseTracker(Request $request)
+{
+    $business = Auth::user();
+    if(!$business || !($business instanceof Business)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
+    }
+
+    // Get year for analysis (default current year)
+    $year = $request->input('year', now()->year);
+    $startDate = "{$year}-01-01";
+    $endDate = "{$year}-12-31";
+
+    // Current month calculations
+    $currentMonth = now()->format('Y-m');
+    $lastMonth = now()->subMonth()->format('Y-m');
+
+    // Current month summary
+    $currentMonthPOs = $business->purchaseOrders()
+        ->whereYear('order_date', now()->year)
+        ->whereMonth('order_date', now()->month)
+        ->get();
+
+    $currentMonthSpend = $currentMonthPOs->sum('net_amount');
+    $currentMonthCount = $currentMonthPOs->count();
+
+    // Last month for comparison
+    $lastMonthPOs = $business->purchaseOrders()
+        ->whereYear('order_date', now()->subMonth()->year)
+        ->whereMonth('order_date', now()->subMonth()->month)
+        ->get();
+
+    $lastMonthSpend = $lastMonthPOs->sum('net_amount');
+
+    // Calculate percentage change
+    $changeFromLastMonth = 0;
+    if ($lastMonthSpend > 0) {
+        $changeFromLastMonth = round((($currentMonthSpend - $lastMonthSpend) / $lastMonthSpend) * 100, 1);
+    }
+
+    // Top vendor for current month
+    $topVendorCurrentMonth = $currentMonthPOs->groupBy('vendor_id')
+        ->map(function ($pos) {
+            return [
+                'vendor' => $pos->first()->vendor,
+                'total_spent' => $pos->sum('net_amount'),
+                'po_count' => $pos->count()
+            ];
+        })
+        ->sortByDesc('total_spent')
+        ->first();
+
+    // YTD (Year to Date) summary
+    $ytdPOs = $business->purchaseOrders()
+        ->whereYear('order_date', now()->year)
+        ->get();
+
+    $ytdTotalSpend = $ytdPOs->sum('net_amount');
+    $ytdTotalCount = $ytdPOs->count();
+
+    // Monthly breakdown for the year
+    $monthlyBreakdown = [];
+
+    for ($month = 1; $month <= 12; $month++) {
+        $monthDate = sprintf('%s-%02d', $year, $month);
+        $monthName = date('M Y', strtotime($monthDate . '-01'));
+
+        $monthPOs = $business->purchaseOrders()
+            ->whereYear('order_date', $year)
+            ->whereMonth('order_date', $month)
+            ->with('vendor')
+            ->get();
+
+        $monthTotalValue = $monthPOs->sum('net_amount');
+        $monthPOCount = $monthPOs->count();
+
+        // Top vendor for this month
+        $topVendorMonth = null;
+        if ($monthPOs->isNotEmpty()) {
+            $vendorSpending = $monthPOs->groupBy('vendor_id')
+                ->map(function ($pos) {
+                    return [
+                        'vendor_name' => $pos->first()->vendor->name ?? 'Unknown',
+                        'total_spent' => $pos->sum('net_amount'),
+                        'po_count' => $pos->count()
+                    ];
+                })
+                ->sortByDesc('total_spent')
+                ->first();
+
+            $topVendorMonth = $vendorSpending['vendor_name'] ?? null;
+        }
+
+        $monthlyBreakdown[] = [
+            'month' => $monthDate,
+            'month_name' => $monthName,
+            'total_value' => $monthTotalValue,
+            'number_of_pos' => $monthPOCount,
+            'top_vendor' => $topVendorMonth,
+        ];
+    }
+
+    // Vendor performance analysis
+    $vendorPerformance = $business->purchaseOrders()
+        ->whereYear('order_date', $year)
+        ->with('vendor')
+        ->get()
+        ->groupBy('vendor_id')
+        ->map(function ($pos) {
+            $vendor = $pos->first()->vendor;
+            return [
+                'vendor_id' => $vendor->id,
+                'vendor_name' => $vendor->name,
+                'total_spent' => $pos->sum('net_amount'),
+                'po_count' => $pos->count(),
+                'avg_po_value' => $pos->avg('net_amount'),
+                'first_po_date' => $pos->min('order_date'),
+                'last_po_date' => $pos->max('order_date'),
+            ];
+        })
+        ->sortByDesc('total_spent')
+        ->values()
+        ->take(10); // Top 10 vendors
+
+    // Spending trends analysis
+    $spendingTrends = [
+        'highest_month' => collect($monthlyBreakdown)->sortByDesc('total_value')->first(),
+        'lowest_month' => collect($monthlyBreakdown)->where('total_value', '>', 0)->sortBy('total_value')->first(),
+        'avg_monthly_spend' => collect($monthlyBreakdown)->avg('total_value'),
+        'most_active_month' => collect($monthlyBreakdown)->sortByDesc('number_of_pos')->first(),
+    ];
+
+    // Quarter analysis
+    $quarterlyAnalysis = [
+        'Q1' => collect($monthlyBreakdown)->slice(0, 3)->sum('total_value'),
+        'Q2' => collect($monthlyBreakdown)->slice(3, 3)->sum('total_value'),
+        'Q3' => collect($monthlyBreakdown)->slice(6, 3)->sum('total_value'),
+        'Q4' => collect($monthlyBreakdown)->slice(9, 3)->sum('total_value'),
+    ];
+
+    // Payment performance integration
+    $paymentMetrics = [
+        'total_payments_made' => $business->payments()->where('status', 'confirmed')
+            ->whereYear('confirmed_at', $year)
+            ->sum('amount'),
+        'pending_payments' => $business->payments()->where('status', 'pending')->sum('amount'),
+        'payment_score' => $business->getPaymentScore(),
+        'avg_payment_time' => $business->getAveragePaymentTime(),
+    ];
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Purchase tracker data retrieved successfully',
+        'data' => [
+            'current_month_summary' => [
+                'total_spend' => $currentMonthSpend,
+                'change_from_last_month' => $changeFromLastMonth,
+                'po_count' => $currentMonthCount,
+                'top_vendor' => $topVendorCurrentMonth['vendor']->name ?? null,
+                'top_vendor_spend' => $topVendorCurrentMonth['total_spent'] ?? 0,
+            ],
+            'ytd_summary' => [
+                'total_spend' => $ytdTotalSpend,
+                'total_pos' => $ytdTotalCount,
+                'avg_po_value' => $ytdTotalCount > 0 ? round($ytdTotalSpend / $ytdTotalCount, 2) : 0,
+            ],
+            'monthly_breakdown' => $monthlyBreakdown,
+            'vendor_performance' => $vendorPerformance,
+            'spending_trends' => $spendingTrends,
+            'quarterly_analysis' => $quarterlyAnalysis,
+            'payment_metrics' => $paymentMetrics,
+            'analysis_period' => [
+                'year' => $year,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'current_month' => now()->format('M Y'),
+            ],
+            'business_context' => [
+                'credit_utilization' => $business->getCreditUtilization(),
+                'available_spending_power' => $business->getAvailableSpendingPower(),
+                'payment_score' => $business->getPaymentScore(),
+            ]
+        ]
+    ]);
+}
+
+/**
+ * Get purchase trends comparison (year over year)
+ */
+public function getPurchaseTrends(Request $request)
+{
+    $business = Auth::user();
+    if(!$business || !($business instanceof Business)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
+    }
+
+    $currentYear = $request->input('year', now()->year);
+    $previousYear = $currentYear - 1;
+
+    // Get data for both years
+    $currentYearData = $business->purchaseOrders()
+        ->whereYear('order_date', $currentYear)
+        ->selectRaw('MONTH(order_date) as month, SUM(net_amount) as total_spend, COUNT(*) as po_count')
+        ->groupBy('month')
+        ->get()
+        ->keyBy('month');
+
+    $previousYearData = $business->purchaseOrders()
+        ->whereYear('order_date', $previousYear)
+        ->selectRaw('MONTH(order_date) as month, SUM(net_amount) as total_spend, COUNT(*) as po_count')
+        ->groupBy('month')
+        ->get()
+        ->keyBy('month');
+
+    // Build comparison data
+    $comparison = [];
+    for ($month = 1; $month <= 12; $month++) {
+        $currentMonth = $currentYearData->get($month);
+        $previousMonth = $previousYearData->get($month);
+
+        $currentSpend = $currentMonth ? $currentMonth->total_spend : 0;
+        $previousSpend = $previousMonth ? $previousMonth->total_spend : 0;
+
+        $changePercent = 0;
+        if ($previousSpend > 0) {
+            $changePercent = round((($currentSpend - $previousSpend) / $previousSpend) * 100, 1);
+        }
+
+        $comparison[] = [
+            'month' => $month,
+            'month_name' => date('M', mktime(0, 0, 0, $month, 1)),
+            'current_year_spend' => $currentSpend,
+            'previous_year_spend' => $previousSpend,
+            'change_percent' => $changePercent,
+            'current_year_pos' => $currentMonth ? $currentMonth->po_count : 0,
+            'previous_year_pos' => $previousMonth ? $previousMonth->po_count : 0,
+        ];
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Purchase trends comparison retrieved successfully',
+        'data' => [
+            'year_comparison' => [
+                'current_year' => $currentYear,
+                'previous_year' => $previousYear,
+            ],
+            'monthly_comparison' => $comparison,
+            'summary' => [
+                'current_year_total' => $currentYearData->sum('total_spend'),
+                'previous_year_total' => $previousYearData->sum('total_spend'),
+                'yoy_growth' => $previousYearData->sum('total_spend') > 0 ?
+                    round((($currentYearData->sum('total_spend') - $previousYearData->sum('total_spend')) / $previousYearData->sum('total_spend')) * 100, 1) : 0,
+            ]
+        ]
+    ]);
+}
 }

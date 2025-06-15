@@ -10,6 +10,7 @@ use App\Models\Payment;
 use App\Models\Vendor;
 use App\Models\SystemSetting;
 use App\Mail\BusinessCredentials;
+use App\Models\BalanceTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -745,4 +746,766 @@ class AdminController extends Controller
             'data' => $summary
         ]);
     }
+
+    /**
+ * @OA\Get(
+ *     path="/api/admin/purchase-orders",
+ *     summary="Get all purchase orders across platform",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Purchase orders retrieved")
+ * )
+ */
+public function getPurchaseOrders(Request $request)
+{
+    $query = PurchaseOrder::with(['business', 'vendor', 'approvedBy', 'payments']);
+
+    // Filters
+    if ($request->filled('status')) {
+        $query->where('status', $request->status);
+    }
+    if ($request->filled('payment_status')) {
+        $query->where('payment_status', $request->payment_status);
+    }
+    if ($request->filled('business_id')) {
+        $query->where('business_id', $request->business_id);
+    }
+    if ($request->filled('overdue_only')) {
+        $query->overdue();
+    }
+    if ($request->filled('high_value')) {
+        $query->where('net_amount', '>=', $request->high_value);
+    }
+
+    $purchaseOrders = $query->orderBy('created_at', 'desc')->paginate(20);
+
+    // Add calculated fields
+    $purchaseOrders->getCollection()->transform(function ($po) {
+        $po->days_since_order = $po->getDaysSinceOrder();
+        $po->is_overdue = $po->isOverdue();
+        $po->days_overdue = $po->getDaysOverdue();
+        $po->payment_progress = $po->getPaymentProgress();
+        $po->accrued_interest = $po->calculateAccruedInterest();
+        return $po;
+    });
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Purchase orders retrieved successfully',
+        'data' => $purchaseOrders,
+        'summary' => [
+            'total_pos' => PurchaseOrder::count(),
+            'pending_approval' => PurchaseOrder::where('status', 'pending')->count(),
+            'overdue_count' => PurchaseOrder::overdue()->count(),
+            'total_value' => PurchaseOrder::sum('net_amount'),
+            'outstanding_value' => PurchaseOrder::sum('outstanding_amount'),
+        ]
+    ]);
+}
+
+/**
+ * @OA\Get(
+ *     path="/api/admin/purchase-orders/{po}",
+ *     summary="Get specific purchase order details",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Purchase order details retrieved")
+ * )
+ */
+public function getPurchaseOrderDetails(PurchaseOrder $po)
+{
+    $po->load(['business', 'vendor', 'approvedBy', 'payments.confirmedBy', 'payments.rejectedBy']);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Purchase order details retrieved successfully',
+        'data' => [
+            'purchase_order' => $po,
+            'calculated_metrics' => [
+                'days_since_order' => $po->getDaysSinceOrder(),
+                'is_overdue' => $po->isOverdue(),
+                'days_overdue' => $po->getDaysOverdue(),
+                'payment_progress' => $po->getPaymentProgress(),
+                'accrued_interest' => $po->calculateAccruedInterest(),
+                'late_fees' => $po->calculateLateFees(),
+                'total_amount_owed' => $po->getTotalAmountOwed(),
+            ],
+            'business_context' => [
+                'current_utilization' => $po->business->getCreditUtilization(),
+                'payment_score' => $po->business->getPaymentScore(),
+                'total_debt' => $po->business->getOutstandingDebt(),
+            ]
+        ]
+    ]);
+}
+
+/**
+ * @OA\Post(
+ *     path="/api/admin/purchase-orders/{po}/approve",
+ *     summary="Approve purchase order",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Purchase order approved")
+ * )
+ */
+public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
+{
+    if ($po->status !== 'pending') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Purchase order is not pending approval'
+        ], 400);
+    }
+
+    $request->validate([
+        'notes' => 'nullable|string|max:500'
+    ]);
+
+    DB::beginTransaction();
+    try {
+        $admin = Auth::user();
+
+        $po->update([
+            'status' => 'approved',
+            'approved_by' => $admin->id,
+            'approved_at' => now(),
+            'notes' => ($po->notes ?? '') . "\nAdmin notes: " . ($request->notes ?? 'Approved'),
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Purchase order approved successfully',
+            'data' => [
+                'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
+                'approval_details' => [
+                    'approved_by' => $admin->name,
+                    'approved_at' => now(),
+                    'notes' => $request->notes,
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to approve purchase order',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * @OA\Post(
+ *     path="/api/admin/purchase-orders/{po}/reject",
+ *     summary="Reject purchase order",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Purchase order rejected")
+ * )
+ */
+public function rejectPurchaseOrder(Request $request, PurchaseOrder $po)
+{
+    if ($po->status !== 'pending') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Purchase order is not pending approval'
+        ], 400);
+    }
+
+    $request->validate([
+        'reason' => 'required|string|max:500'
+    ]);
+
+    DB::beginTransaction();
+    try {
+        $admin = Auth::user();
+        $business = $po->business;
+
+        // If PO was already reducing spending power, restore it
+        if ($po->status === 'pending') {
+            $business->available_balance += $po->net_amount;
+            $business->credit_balance -= $po->net_amount;
+            $business->credit_limit = $business->available_balance;
+            $business->save();
+
+            // Log the restoration
+            $business->logBalanceTransaction(
+                'available',
+                $po->net_amount,
+                'credit',
+                'Spending power restored due to PO rejection',
+                'po_rejection',
+                $po->id
+            );
+        }
+
+        $po->update([
+            'status' => 'rejected',
+            'approved_by' => $admin->id,
+            'approved_at' => now(),
+            'notes' => ($po->notes ?? '') . "\nRejection reason: " . $request->reason,
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Purchase order rejected successfully',
+            'data' => [
+                'purchase_order' => $po->fresh(['business', 'vendor']),
+                'rejection_details' => [
+                    'rejected_by' => $admin->name,
+                    'rejected_at' => now(),
+                    'reason' => $request->reason,
+                ],
+                'business_balances_restored' => [
+                    'available_spending_power' => $business->fresh()->available_balance,
+                    'outstanding_debt' => $business->fresh()->credit_balance,
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to reject purchase order',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * @OA\Put(
+ *     path="/api/admin/purchase-orders/{po}/update-status",
+ *     summary="Update purchase order status",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Purchase order status updated")
+ * )
+ */
+public function updatePurchaseOrderStatus(Request $request, PurchaseOrder $po)
+{
+    $request->validate([
+        'status' => 'required|in:draft,pending,approved,rejected,completed,cancelled',
+        'notes' => 'nullable|string|max:500'
+    ]);
+
+    $oldStatus = $po->status;
+    $newStatus = $request->status;
+
+    if ($oldStatus === $newStatus) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Purchase order is already in the specified status'
+        ], 400);
+    }
+
+    DB::beginTransaction();
+    try {
+        $admin = Auth::user();
+
+        $po->update([
+            'status' => $newStatus,
+            'notes' => ($po->notes ?? '') . "\nStatus changed from {$oldStatus} to {$newStatus}: " . ($request->notes ?? ''),
+        ]);
+
+        // Handle status-specific logic
+        if ($newStatus === 'approved' && $oldStatus === 'pending') {
+            $po->update([
+                'approved_by' => $admin->id,
+                'approved_at' => now(),
+            ]);
+        }
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => "Purchase order status updated from {$oldStatus} to {$newStatus}",
+            'data' => [
+                'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
+                'status_change' => [
+                    'old_status' => $oldStatus,
+                    'new_status' => $newStatus,
+                    'updated_by' => $admin->name,
+                    'updated_at' => now(),
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to update purchase order status',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * USER MANAGEMENT
+ * ===============
+ */
+
+/**
+ * @OA\Get(
+ *     path="/api/admin/users",
+ *     summary="Get all users in the system",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Users retrieved")
+ * )
+ */
+public function getUsers(Request $request)
+{
+    $query = User::query();
+
+    // Filters
+    if ($request->filled('user_type')) {
+        $query->where('user_type', $request->user_type);
+    }
+    if ($request->filled('is_active')) {
+        $query->where('is_active', $request->is_active);
+    }
+    if ($request->filled('role')) {
+        $query->where('role', $request->role);
+    }
+
+    $users = $query->withCount('createdBusinesses')
+                  ->orderBy('created_at', 'desc')
+                  ->paginate(20);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Users retrieved successfully',
+        'data' => $users,
+        'summary' => [
+            'total_users' => User::count(),
+            'admin_users' => User::where('user_type', 'admin')->count(),
+            'active_users' => User::where('is_active', true)->count(),
+        ]
+    ]);
+}
+
+/**
+ * @OA\Post(
+ *     path="/api/admin/users",
+ *     summary="Create new user",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=201, description="User created")
+ * )
+ */
+public function createUser(Request $request)
+{
+    $request->validate([
+        'name' => 'required|string|max:255',
+        'email' => 'required|email|unique:users,email',
+        'password' => 'required|string|min:8',
+        'user_type' => 'required|in:admin,business',
+        'role' => 'required|in:super_admin,admin,business',
+        'is_active' => 'boolean',
+    ]);
+
+    try {
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'password' => $request->password,
+            'user_type' => $request->user_type,
+            'role' => $request->role,
+            'is_active' => $request->is_active ?? true,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User created successfully',
+            'data' => $user
+        ], 201);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to create user',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * @OA\Put(
+ *     path="/api/admin/users/{user}",
+ *     summary="Update user",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="User updated")
+ * )
+ */
+public function updateUser(Request $request, User $user)
+{
+    $request->validate([
+        'name' => 'string|max:255',
+        'email' => 'email|unique:users,email,' . $user->id,
+        'password' => 'nullable|string|min:8',
+        'user_type' => 'in:admin,business',
+        'role' => 'in:super_admin,admin,business',
+        'is_active' => 'boolean',
+    ]);
+
+    try {
+        $updateData = $request->only(['name', 'email', 'user_type', 'role', 'is_active']);
+
+        if ($request->filled('password')) {
+            $updateData['password'] = $request->password;
+        }
+
+        $user->update($updateData);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User updated successfully',
+            'data' => $user->fresh()
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to update user',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * @OA\Delete(
+ *     path="/api/admin/users/{user}",
+ *     summary="Delete user",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="User deleted")
+ * )
+ */
+public function deleteUser(User $user)
+{
+    // Prevent deleting the current admin
+    if ($user->id === Auth::id()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Cannot delete your own account'
+        ], 400);
+    }
+
+    // Check if user has created businesses
+    $businessCount = $user->createdBusinesses()->count();
+    if ($businessCount > 0) {
+        return response()->json([
+            'success' => false,
+            'message' => "Cannot delete user who has created {$businessCount} businesses. Deactivate instead."
+        ], 400);
+    }
+
+    try {
+        $userName = $user->name;
+        $user->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => "User '{$userName}' deleted successfully"
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to delete user',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * PAYMENT HISTORY & TRANSACTIONS
+ * ==============================
+ */
+
+/**
+ * @OA\Get(
+ *     path="/api/admin/payments/history",
+ *     summary="Get comprehensive payment history",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Payment history retrieved")
+ * )
+ */
+public function getPaymentHistory(Request $request)
+{
+    $query = Payment::with(['business', 'purchaseOrder.vendor', 'confirmedBy', 'rejectedBy']);
+
+    // Filters
+    if ($request->filled('status')) {
+        $query->where('status', $request->status);
+    }
+    if ($request->filled('business_id')) {
+        $query->where('business_id', $request->business_id);
+    }
+    if ($request->filled('payment_type')) {
+        $query->where('payment_type', $request->payment_type);
+    }
+    if ($request->filled('date_from')) {
+        $query->whereDate('payment_date', '>=', $request->date_from);
+    }
+    if ($request->filled('date_to')) {
+        $query->whereDate('payment_date', '<=', $request->date_to);
+    }
+    if ($request->filled('min_amount')) {
+        $query->where('amount', '>=', $request->min_amount);
+    }
+
+    $payments = $query->orderBy('created_at', 'desc')->paginate(20);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Payment history retrieved successfully',
+        'data' => $payments,
+        'summary' => [
+            'total_payments' => Payment::count(),
+            'confirmed_payments' => Payment::where('status', 'confirmed')->count(),
+            'pending_payments' => Payment::where('status', 'pending')->count(),
+            'rejected_payments' => Payment::where('status', 'rejected')->count(),
+            'total_confirmed_value' => Payment::where('status', 'confirmed')->sum('amount'),
+            'pending_value' => Payment::where('status', 'pending')->sum('amount'),
+        ]
+    ]);
+}
+
+/**
+ * @OA\Get(
+ *     path="/api/admin/transactions/recent",
+ *     summary="Get recent balance transactions across platform",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Recent transactions retrieved")
+ * )
+ */
+public function getRecentTransactions(Request $request)
+{
+    $limit = $request->input('limit', 50);
+    $businessId = $request->input('business_id');
+
+    $query = BalanceTransaction::with('business');
+
+    if ($businessId) {
+        $query->where('business_id', $businessId);
+    }
+
+    $transactions = $query->orderBy('created_at', 'desc')
+                          ->limit($limit)
+                          ->get();
+
+    // Group by transaction type for summary
+    $summary = [
+        'credit_transactions' => $transactions->where('transaction_type', 'credit')->count(),
+        'debit_transactions' => $transactions->where('transaction_type', 'debit')->count(),
+        'total_credit_amount' => $transactions->where('transaction_type', 'credit')->sum('amount'),
+        'total_debit_amount' => $transactions->where('transaction_type', 'debit')->sum('amount'),
+        'balance_types' => $transactions->groupBy('balance_type')->map->count(),
+    ];
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Recent transactions retrieved successfully',
+        'data' => $transactions,
+        'summary' => $summary
+    ]);
+}
+
+/**
+ * BUSINESS REPAYMENTS
+ * ===================
+ */
+
+/**
+ * @OA\Get(
+ *     path="/api/admin/businesses/{business}/repayments",
+ *     summary="Get repayment history for specific business",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Business repayments retrieved")
+ * )
+ */
+public function getBusinessRepayments(Business $business)
+{
+    $repayments = $business->payments()
+                          ->with(['purchaseOrder.vendor', 'confirmedBy', 'rejectedBy'])
+                          ->orderBy('created_at', 'desc')
+                          ->paginate(20);
+
+    $summary = [
+        'total_repayments' => $business->payments()->count(),
+        'confirmed_repayments' => $business->payments()->where('status', 'confirmed')->count(),
+        'pending_repayments' => $business->payments()->where('status', 'pending')->count(),
+        'rejected_repayments' => $business->payments()->where('status', 'rejected')->count(),
+        'total_repaid' => $business->payments()->where('status', 'confirmed')->sum('amount'),
+        'pending_repayment_value' => $business->payments()->where('status', 'pending')->sum('amount'),
+        'average_repayment_time' => $business->getAveragePaymentTime(),
+        'payment_score' => $business->getPaymentScore(),
+    ];
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Business repayments retrieved successfully',
+        'data' => [
+            'business' => $business,
+            'repayments' => $repayments,
+            'summary' => $summary,
+            'current_balances' => [
+                'outstanding_debt' => $business->getOutstandingDebt(),
+                'available_spending_power' => $business->getAvailableSpendingPower(),
+                'credit_utilization' => $business->getCreditUtilization(),
+            ]
+        ]
+    ]);
+}
+
+/**
+ * @OA\Post(
+ *     path="/api/admin/businesses/{business}/repayments/{payment}/approve",
+ *     summary="Approve specific repayment (alias for payment approval)",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Repayment approved")
+ * )
+ */
+public function approveBusinessRepayment(Request $request, Business $business, Payment $payment)
+{
+    // Verify payment belongs to business
+    if ($payment->business_id !== $business->id) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Payment does not belong to specified business'
+        ], 400);
+    }
+
+    // Use existing payment approval logic
+    return $this->approvePayment($request, $payment);
+}
+
+/**
+ * @OA\Post(
+ *     path="/api/admin/businesses/{business}/repayments/{payment}/reject",
+ *     summary="Reject specific repayment (alias for payment rejection)",
+ *     tags={"Admin"},
+ *     security={{"sanctumAuth":{}}},
+ *     @OA\Response(response=200, description="Repayment rejected")
+ * )
+ */
+public function rejectBusinessRepayment(Request $request, Business $business, Payment $payment)
+{
+    // Verify payment belongs to business
+    if ($payment->business_id !== $business->id) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Payment does not belong to specified business'
+        ], 400);
+    }
+
+    // Use existing payment rejection logic
+    return $this->rejectPayment($request, $payment);
+}
+
+/**
+ * ENHANCED BUSINESS LIST WITH DETAILED METRICS
+ * ============================================
+ */
+
+/**
+ * Override the existing getBusinesses method with enhanced data
+ */
+public function getBusinessesEnhanced(Request $request)
+{
+    $query = Business::with(['riskTier', 'createdBy']);
+
+    // Filters
+    if ($request->filled('status')) {
+        $query->where('is_active', $request->status === 'active');
+    }
+    if ($request->filled('high_utilization')) {
+        $query->whereRaw('(credit_balance / current_balance) > 0.8');
+    }
+    if ($request->filled('min_credit')) {
+        $query->where('current_balance', '>=', $request->min_credit);
+    }
+    if ($request->filled('has_debt')) {
+        $query->where('credit_balance', '>', 0);
+    }
+
+    $businesses = $query->orderBy('created_at', 'desc')->paginate(20);
+
+    // Enhanced business data with comprehensive metrics
+    $businesses->getCollection()->transform(function ($business) {
+        // Calculate metrics
+        $totalPOs = $business->purchaseOrders()->count();
+        $lastActivity = $business->purchaseOrders()->latest()->first()?->created_at
+                       ?? $business->payments()->latest()->first()?->created_at
+                       ?? $business->updated_at;
+
+        $business->enhanced_metrics = [
+            'current_balance' => $business->current_balance,
+            'available_balance' => $business->available_balance,
+            'credit_balance' => $business->credit_balance,
+            'credit_utilization' => $business->getCreditUtilization(),
+            'spending_power_utilization' => $business->getSpendingPowerUtilization(),
+            'payment_score' => $business->getPaymentScore(),
+            'total_pos' => $totalPOs,
+            'pending_pos' => $business->purchaseOrders()->where('status', 'pending')->count(),
+            'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
+            'pending_payments' => $business->payments()->where('status', 'pending')->count(),
+            'total_spent' => $business->purchaseOrders()->sum('net_amount'),
+            'total_repaid' => $business->payments()->where('status', 'confirmed')->sum('amount'),
+            'last_activity' => $lastActivity?->format('Y-m-d'),
+            'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
+            'effective_interest_rate' => $business->getEffectiveInterestRate(),
+            'potential_monthly_interest' => $business->calculatePotentialInterest(30),
+            'risk_level' => $this->calculateRiskLevel($business),
+        ];
+
+        return $business;
+    });
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Businesses retrieved successfully',
+        'data' => $businesses,
+        'platform_summary' => [
+            'total_businesses' => Business::count(),
+            'active_businesses' => Business::where('is_active', true)->count(),
+            'total_assigned_credit' => Business::sum('current_balance'),
+            'total_outstanding_debt' => Business::sum('credit_balance'),
+            'average_utilization' => Business::avg(DB::raw('(credit_balance / current_balance) * 100')),
+            'high_risk_businesses' => Business::whereRaw('(credit_balance / current_balance) > 0.8')->count(),
+        ]
+    ]);
+}
+
+/**
+ * Calculate risk level for business
+ */
+private function calculateRiskLevel(Business $business)
+{
+    $utilization = $business->getCreditUtilization();
+    $paymentScore = $business->getPaymentScore();
+    $overdueCount = $business->purchaseOrders()->overdue()->count();
+
+    if ($utilization > 90 || $paymentScore < 60 || $overdueCount > 5) {
+        return 'high';
+    } elseif ($utilization > 70 || $paymentScore < 80 || $overdueCount > 2) {
+        return 'medium';
+    } else {
+        return 'low';
+    }
+}
 }

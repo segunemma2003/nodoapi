@@ -93,4 +93,75 @@ class User extends Authenticatable
         $tokenName = $this->isAdmin() ? 'admin-token' : 'business-token';
         return $this->createToken($tokenName, $abilities);
     }
+
+    public function supportTicketsCreated()
+{
+    return $this->hasMany(SupportTicket::class, 'created_by');
+}
+
+public function assignedTickets()
+{
+    return $this->hasMany(SupportTicket::class, 'assigned_to');
+}
+
+public function resolvedTickets()
+{
+    return $this->hasMany(SupportTicket::class, 'resolved_by');
+}
+
+public function supportTicketResponses()
+{
+    return $this->hasMany(SupportTicketResponse::class);
+}
+
+public function supportTicketActivities()
+{
+    return $this->hasMany(SupportTicketActivity::class);
+}
+
+// Get admin's support performance metrics
+public function getSupportPerformanceMetrics($days = 30)
+{
+    $startDate = now()->subDays($days);
+
+    $assignedTickets = $this->assignedTickets()
+        ->where('created_at', '>=', $startDate)
+        ->get();
+
+    $resolvedTickets = $assignedTickets->where('status', 'resolved');
+
+    return [
+        'assigned_tickets' => $assignedTickets->count(),
+        'resolved_tickets' => $resolvedTickets->count(),
+        'resolution_rate' => $assignedTickets->count() > 0 ?
+            round(($resolvedTickets->count() / $assignedTickets->count()) * 100, 2) : 0,
+        'avg_resolution_time_hours' => $resolvedTickets->isEmpty() ? null :
+            round($resolvedTickets->avg(function($ticket) {
+                return $ticket->created_at->diffInHours($ticket->resolved_at);
+            }), 2),
+        'avg_first_response_time_minutes' => $this->getAverageFirstResponseTime($startDate),
+        'overdue_tickets' => $assignedTickets->filter(function($ticket) {
+            return $ticket->isOverdue();
+        })->count(),
+    ];
+}
+
+private function getAverageFirstResponseTime($startDate)
+{
+    $responses = $this->supportTicketResponses()
+        ->where('response_type', 'admin_response')
+        ->where('created_at', '>=', $startDate)
+        ->with('ticket')
+        ->get();
+
+    if ($responses->isEmpty()) {
+        return null;
+    }
+
+    $totalMinutes = $responses->sum(function($response) {
+        return $response->ticket->created_at->diffInMinutes($response->created_at);
+    });
+
+    return round($totalMinutes / $responses->count(), 2);
+}
 }
