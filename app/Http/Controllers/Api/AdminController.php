@@ -63,7 +63,9 @@ class AdminController extends Controller
             'payment_stats' => [
                 'total_payments' => $payments->count(),
                 'pending_payments' => $payments->where('status', 'pending')->count(),
-                'confirmed_payments' => $payments->where('status', 'confirmed')->count(),
+                // 'confirmed_payments' => Payment::whereHas('purchaseOrder', function($query) use ($businessId) {
+                //             $query->where('business_id', $businessId);
+                //         })->where('payments.status', 'confirmed')->count(),
                 'rejected_payments' => $payments->where('status', 'rejected')->count(),
                 'total_payment_value' => $payments->where('status', 'confirmed')->sum('amount'),
                 'pending_payment_value' => $payments->where('status', 'pending')->sum('amount'),
@@ -1273,7 +1275,9 @@ public function getPaymentHistory(Request $request)
         'data' => $payments,
         'summary' => [
             'total_payments' => Payment::count(),
-            'confirmed_payments' => Payment::where('status', 'confirmed')->count(),
+        //    'confirmed_payments' => Payment::whereHas('purchaseOrder', function($query) use ($businessId) {
+        //     $query->where('business_id', $businessId);
+        // })->where('payments.status', 'confirmed')->count(),
             'pending_payments' => Payment::where('status', 'pending')->count(),
             'rejected_payments' => Payment::where('status', 'rejected')->count(),
             'total_confirmed_value' => Payment::where('status', 'confirmed')->sum('amount'),
