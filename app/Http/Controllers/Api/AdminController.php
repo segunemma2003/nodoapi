@@ -1635,11 +1635,11 @@ public function getBusinessesEnhanced(Request $request)
         //     'total_repaid' => $business->directPayments()
         //         ->where('payments.status', 'confirmed') // Qualified column name
         //         ->sum('amount'),
-            'last_activity' => $lastActivity?->format('Y-m-d'),
-            'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
-            'effective_interest_rate' => $business->getEffectiveInterestRate(),
-            'potential_monthly_interest' => $business->calculatePotentialInterest(30),
-            'risk_level' => $this->calculateRiskLevel($business),
+        //     'last_activity' => $lastActivity?->format('Y-m-d'),
+        //     'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
+        //     'effective_interest_rate' => $business->getEffectiveInterestRate(),
+        //     'potential_monthly_interest' => $business->calculatePotentialInterest(30),
+        //     'risk_level' => $this->calculateRiskLevel($business),
         ];
 
         return $business;
