@@ -28,13 +28,20 @@ return new class extends Migration
             $table->timestamp('approved_at')->nullable();
             $table->foreignId('approved_by')->nullable()->constrained('users');
             $table->timestamps();
-
+            $table->decimal('total_paid_amount', 15, 2)->default(0);
+            $table->decimal('outstanding_amount', 15, 2)->default(0);
+            $table->enum('payment_status', ['unpaid', 'partially_paid', 'fully_paid'])->default('unpaid');
+            $table->decimal('interest_rate', 5, 2)->default(0); // annual interest rate
+            $table->date('due_date')->nullable();
+            $table->decimal('late_fee_amount', 15, 2)->default(0);
             // Performance indexes
             $table->index(['business_id', 'status']);
             $table->index(['vendor_id', 'status']);
             $table->index('po_number');
             $table->index(['order_date', 'status']);
             $table->index(['net_amount', 'business_id']);
+            $table->index(['payment_status', 'outstanding_amount']);
+            $table->index(['due_date', 'payment_status']);
         });
     }
 

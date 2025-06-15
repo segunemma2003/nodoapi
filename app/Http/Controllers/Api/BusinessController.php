@@ -4,16 +4,19 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Business;
+use App\Models\Payment;
 use App\Models\Vendor;
 use App\Models\PurchaseOrder;
+use App\Models\SystemSetting;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * @OA\Tag(
  *     name="Business",
- *     description="Business operations"
+ *     description="Business operations - Revolving Credit System"
  * )
  */
 class BusinessController extends Controller
@@ -37,14 +40,35 @@ class BusinessController extends Controller
             ], 403);
         }
 
+        // Get credit and spending metrics
+        $totalAssignedCredit = $business->getTotalAssignedCredit();
+        $availableSpendingPower = $business->getAvailableSpendingPower();
+        $outstandingDebt = $business->getOutstandingDebt();
+        $creditUtilization = $business->getCreditUtilization();
+        $spendingPowerUtilization = $business->getSpendingPowerUtilization();
+        $paymentScore = $business->getPaymentScore();
+
         $data = [
-            'business_info' => $business,
+            'business_info' => $business->load('riskTier'),
+            'credit_summary' => [
+                'total_assigned_credit' => $totalAssignedCredit,      // current_balance
+                'available_spending_power' => $availableSpendingPower, // available_balance
+                'outstanding_debt' => $outstandingDebt,                // credit_balance
+                'used_credit' => $totalAssignedCredit - $availableSpendingPower,
+                'credit_utilization' => $creditUtilization,
+                'spending_power_utilization' => $spendingPowerUtilization,
+            ],
             'balances' => [
-                'available_balance' => $business->available_balance,
-                'current_balance' => $business->current_balance,
-                'credit_balance' => $business->credit_balance,
-                'treasury_collateral_balance' => $business->treasury_collateral_balance,
-                'credit_limit' => $business->credit_limit,
+                'current_balance' => $business->current_balance,        // Total assigned credit
+                'available_balance' => $business->available_balance,    // Spending power left
+                'credit_balance' => $business->credit_balance,          // Outstanding debt
+                'credit_limit' => $business->credit_limit,              // Same as available
+            ],
+            'performance_metrics' => [
+                'payment_score' => $paymentScore,
+                'effective_interest_rate' => $business->getEffectiveInterestRate(),
+                'risk_tier' => $business->riskTier?->tier_name ?? 'Unassigned',
+                'business_age_months' => $business->created_at->diffInMonths(now()),
             ],
             'statistics' => [
                 'total_vendors' => $business->vendors()->count(),
@@ -53,7 +77,9 @@ class BusinessController extends Controller
                 'draft_purchase_orders' => $business->purchaseOrders()->where('status', 'draft')->count(),
                 'pending_purchase_orders' => $business->purchaseOrders()->where('status', 'pending')->count(),
                 'approved_purchase_orders' => $business->purchaseOrders()->where('status', 'approved')->count(),
-                'total_po_amount' => $business->purchaseOrders()->sum('net_amount'),
+                'total_spent' => $business->purchaseOrders()->sum('net_amount'),
+                'total_payments_made' => $business->payments()->where('status', 'confirmed')->sum('amount'),
+                'pending_payments' => $business->payments()->where('status', 'pending')->count(),
             ],
         ];
 
@@ -70,15 +96,6 @@ class BusinessController extends Controller
      *     summary="Create a new vendor",
      *     tags={"Business"},
      *     security={{"sanctumAuth":{}}},
-     *     @OA\RequestBody(
-     *         required=true,
-     *         @OA\JsonContent(
-     *             required={"name","email"},
-     *             @OA\Property(property="name", type="string", example="Supplier ABC"),
-     *             @OA\Property(property="email", type="string", format="email", example="supplier@abc.com"),
-     *             @OA\Property(property="category", type="string", example="Office Supplies")
-     *         )
-     *     ),
      *     @OA\Response(response=201, description="Vendor created successfully")
      * )
      */
@@ -121,24 +138,21 @@ class BusinessController extends Controller
     /**
      * @OA\Post(
      *     path="/api/business/purchase-orders",
-     *     summary="Create purchase order",
+     *     summary="Create purchase order (Platform pays vendor directly)",
      *     tags={"Business"},
      *     security={{"sanctumAuth":{}}},
      *     @OA\RequestBody(
      *         required=true,
      *         @OA\JsonContent(
-     *             required={"vendor_id","order_date"},
+     *             required={"vendor_id","order_date","net_amount"},
      *             @OA\Property(property="vendor_id", type="integer", example=1),
      *             @OA\Property(property="order_date", type="string", format="date", example="2024-01-15"),
-     *             @OA\Property(property="status", type="string", enum={"draft","pending"}, example="draft"),
-     *             @OA\Property(property="items", type="array", @OA\Items(
-     *                 @OA\Property(property="description", type="string", example="Office supplies"),
-     *                 @OA\Property(property="quantity", type="number", example=10),
-     *                 @OA\Property(property="unit_price", type="number", format="float", example=25.50)
-     *             ))
+     *             @OA\Property(property="net_amount", type="number", format="float", example=5000.00),
+     *             @OA\Property(property="status", type="string", enum={"draft","pending"}, example="pending"),
+     *             @OA\Property(property="description", type="string", example="Office equipment purchase")
      *         )
      *     ),
-     *     @OA\Response(response=201, description="Purchase order created")
+     *     @OA\Response(response=201, description="Purchase order created - platform will pay vendor")
      * )
      */
     public function createPurchaseOrder(Request $request)
@@ -153,58 +167,39 @@ class BusinessController extends Controller
 
         $request->validate([
             'vendor_id' => 'required|exists:vendors,id',
-            'items' => 'nullable|array|max:50',
-            'items.*.description' => 'required_with:items|string|max:255',
-            'items.*.quantity' => 'required_with:items|numeric|min:0.01|max:999999',
-            'items.*.unit_price' => 'required_with:items|numeric|min:0|max:9999999999.99',
+            'net_amount' => 'required|numeric|min:1|max:9999999999.99',
             'order_date' => 'required|date|before_or_equal:today',
             'expected_delivery_date' => 'nullable|date|after:order_date',
+            'description' => 'required|string|max:500',
             'notes' => 'nullable|string|max:1000',
-            'tax_amount' => 'nullable|numeric|min:0|max:9999999999.99',
-            'discount_amount' => 'nullable|numeric|min:0|max:9999999999.99',
             'status' => 'nullable|in:draft,pending',
         ]);
 
         // Verify vendor belongs to business
         $vendor = $business->vendors()->findOrFail($request->vendor_id);
 
-        // Calculate totals
-        $totalAmount = 0;
-        $items = [];
+        $netAmount = $request->net_amount;
+        $status = $request->status ?? 'pending';
 
-        // Only calculate amounts if items are provided
-        if ($request->filled('items') && is_array($request->items)) {
-            foreach ($request->items as $item) {
-                $lineTotal = $item['quantity'] * $item['unit_price'];
-                $totalAmount += $lineTotal;
-
-                $items[] = [
-                    'description' => $item['description'],
-                    'quantity' => $item['quantity'],
-                    'unit_price' => $item['unit_price'],
-                    'line_total' => $lineTotal,
-                ];
-            }
-        }
-
-        $taxAmount = $request->tax_amount ?? 0;
-        $discountAmount = $request->discount_amount ?? 0;
-        $netAmount = $totalAmount + $taxAmount - $discountAmount;
-        $status = $request->status ?? 'draft';
-
-        // Only check balance if status is pending and has items with amount
-        if ($status === 'pending' && $netAmount > 0) {
+        // Check available spending power for pending orders
+        if ($status === 'pending') {
             if (!$business->canCreatePurchaseOrder($netAmount)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Insufficient available balance to create this purchase order',
+                    'message' => 'Insufficient spending power to create this purchase order',
                     'errors' => [
                         'required_amount' => $netAmount,
-                        'available_balance' => $business->available_balance
+                        'available_spending_power' => $business->getAvailableSpendingPower(),
+                        'total_assigned_credit' => $business->getTotalAssignedCredit(),
+                        'current_utilization' => $business->getSpendingPowerUtilization()
                     ]
                 ], 400);
             }
         }
+
+        // Calculate due date
+        $paymentTermsDays = SystemSetting::getValue('default_payment_terms_days', 30);
+        $dueDate = now()->addDays($paymentTermsDays)->toDateString();
 
         DB::beginTransaction();
         try {
@@ -213,28 +208,27 @@ class BusinessController extends Controller
                 'po_number' => PurchaseOrder::generatePoNumber($business->id),
                 'business_id' => $business->id,
                 'vendor_id' => $vendor->id,
-                'total_amount' => $totalAmount,
-                'tax_amount' => $taxAmount,
-                'discount_amount' => $discountAmount,
                 'net_amount' => $netAmount,
+                'outstanding_amount' => $netAmount, // Initially, full amount is outstanding
+                'payment_status' => 'unpaid',
                 'status' => $status,
                 'order_date' => $request->order_date,
+                'due_date' => $dueDate,
                 'expected_delivery_date' => $request->expected_delivery_date,
+                'description' => $request->description,
                 'notes' => $request->notes,
-                'items' => empty($items) ? null : $items,
             ]);
 
-            // Only deduct balance if status is pending and has amount
-            if ($status === 'pending' && $netAmount > 0) {
-                // Deduct from available balance
-                $business->updateBalance('available', $netAmount, 'subtract');
+            // For pending orders, reduce spending power and create debt
+            if ($status === 'pending') {
+                $business->createPurchaseOrder($netAmount, $purchaseOrder->id);
             }
 
             DB::commit();
 
             $message = $status === 'draft' ?
-                'Draft purchase order created successfully. Add items and change status to pending when ready.' :
-                'Purchase order created successfully';
+                'Draft purchase order created successfully. Change status to pending to commit spending power.' :
+                'Purchase order created successfully. Platform will pay vendor directly.';
 
             return response()->json([
                 'success' => true,
@@ -250,5 +244,523 @@ class BusinessController extends Controller
                 'errors' => ['error' => $e->getMessage()]
             ], 500);
         }
+    }
+
+    /**
+     * @OA\Post(
+     *     path="/api/business/purchase-orders/{po}/payments",
+     *     summary="Submit payment to restore spending power",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Parameter(
+     *         name="po",
+     *         in="path",
+     *         required=true,
+     *         @OA\Schema(type="integer")
+     *     ),
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\MediaType(
+     *             mediaType="multipart/form-data",
+     *             @OA\Schema(
+     *                 required={"amount","receipt"},
+     *                 @OA\Property(property="amount", type="number", format="float", example=1000.00),
+     *                 @OA\Property(property="receipt", type="string", format="binary"),
+     *                 @OA\Property(property="notes", type="string", example="Payment to restore spending power")
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=201, description="Payment submitted - awaiting admin approval to restore credit")
+     * )
+     */
+    public function submitPayment(Request $request, PurchaseOrder $po)
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        // Verify PO belongs to business
+        if ($po->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order not found or access denied'
+            ], 404);
+        }
+
+        $maxPayment = min($po->outstanding_amount, $business->getMaxPaymentAmount());
+
+        $request->validate([
+            'amount' => 'required|numeric|min:1|max:' . $maxPayment,
+            'receipt' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // 5MB max
+            'notes' => 'nullable|string|max:500'
+        ]);
+
+        // Store receipt file
+        $receiptPath = $request->file('receipt')->store('receipts/' . $po->business_id, 'private');
+
+        DB::beginTransaction();
+        try {
+            $payment = Payment::create([
+                'payment_reference' => $this->generatePaymentReference(),
+                'purchase_order_id' => $po->id,
+                'business_id' => $po->business_id,
+                'amount' => $request->amount,
+                'payment_type' => 'business_payment',
+                'status' => 'pending',
+                'receipt_path' => $receiptPath,
+                'notes' => $request->notes,
+                'payment_date' => now()
+            ]);
+
+            // Just log the submission - no balance changes until admin approves
+            $business->submitPayment($request->amount, $payment->id);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Payment submitted successfully. Admin approval will restore your spending power.',
+                'data' => [
+                    'payment' => $payment,
+                    'current_debt' => $business->getOutstandingDebt(),
+                    'potential_restored_credit' => $request->amount,
+                ]
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollback();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to submit payment',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/api/business/purchase-orders/{po}/payments",
+     *     summary="Get payment history for purchase order",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Payment history retrieved")
+     * )
+     */
+    public function getPaymentHistory(PurchaseOrder $po)
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        // Verify PO belongs to business
+        if ($po->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order not found or access denied'
+            ], 404);
+        }
+
+        $payments = $po->payments()->with('confirmedBy')->orderBy('created_at', 'desc')->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Payment history retrieved successfully',
+            'data' => [
+                'purchase_order' => $po->load('vendor'),
+                'payments' => $payments,
+                'summary' => [
+                    'total_amount' => $po->net_amount,
+                    'total_paid' => $po->total_paid_amount,
+                    'outstanding_amount' => $po->outstanding_amount,
+                    'payment_status' => $po->payment_status,
+                    'payments_count' => $payments->count(),
+                    'confirmed_payments' => $payments->where('status', 'confirmed')->count(),
+                    'pending_payments' => $payments->where('status', 'pending')->count(),
+                    'potential_credit_restoration' => $payments->where('status', 'pending')->sum('amount'),
+                ]
+            ]
+        ]);
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/api/business/credit-status",
+     *     summary="Get credit and spending power status",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Credit status retrieved")
+     * )
+     */
+    public function getCreditStatus()
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $totalAssignedCredit = $business->getTotalAssignedCredit();
+        $availableSpendingPower = $business->getAvailableSpendingPower();
+        $outstandingDebt = $business->getOutstandingDebt();
+        $creditUtilization = $business->getCreditUtilization();
+        $spendingPowerUtilization = $business->getSpendingPowerUtilization();
+        $paymentScore = $business->getPaymentScore();
+
+        // Calculate potential interest if applicable
+        $interestRate = $business->getEffectiveInterestRate();
+        $potentialMonthlyInterest = $business->calculatePotentialInterest(30);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Credit status retrieved successfully',
+            'data' => [
+                'credit_overview' => [
+                    'total_assigned_credit' => $totalAssignedCredit,      // What admin assigned
+                    'available_spending_power' => $availableSpendingPower, // What you can still spend
+                    'used_credit' => $totalAssignedCredit - $availableSpendingPower,
+                    'outstanding_debt' => $outstandingDebt,                // What you owe
+                ],
+                'utilization_metrics' => [
+                    'credit_utilization' => $creditUtilization,           // Debt vs assigned credit
+                    'spending_power_utilization' => $spendingPowerUtilization, // Used vs available
+                ],
+                'performance_metrics' => [
+                    'payment_score' => $paymentScore,
+                    'average_payment_time' => $business->getAveragePaymentTime(),
+                    'business_age_months' => $business->created_at->diffInMonths(now()),
+                ],
+                'interest_information' => [
+                    'effective_interest_rate' => $interestRate,
+                    'interest_applicable' => $interestRate > 0,
+                    'potential_monthly_interest' => $potentialMonthlyInterest,
+                    'risk_tier' => $business->riskTier?->tier_name ?? 'Unassigned',
+                ],
+                'balance_details' => [
+                    'current_balance' => $business->current_balance,       // Total assigned credit
+                    'available_balance' => $business->available_balance,   // Spending power left
+                    'credit_balance' => $business->credit_balance,         // Outstanding debt
+                    'credit_limit' => $business->credit_limit,             // Same as available
+                ],
+                'next_actions' => [
+                    'can_create_po' => $availableSpendingPower > 0,
+                    'max_po_amount' => $availableSpendingPower,
+                    'should_make_payment' => $outstandingDebt > 0,
+                    'max_payment_amount' => $business->getMaxPaymentAmount(),
+                ]
+            ]
+        ]);
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/api/business/spending-analysis",
+     *     summary="Get detailed spending and debt analysis",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Spending analysis retrieved")
+     * )
+     */
+    public function getSpendingAnalysis()
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $outstandingOrders = $business->purchaseOrders()
+            ->whereIn('payment_status', ['unpaid', 'partially_paid'])
+            ->with(['vendor', 'payments' => function($query) {
+                $query->where('status', 'confirmed');
+            }])
+            ->orderBy('order_date', 'desc')
+            ->get();
+
+        $spendingBreakdown = [];
+        $totalPrincipal = 0;
+        $potentialInterest = 0;
+
+        foreach ($outstandingOrders as $order) {
+            $daysSinceOrder = now()->diffInDays($order->order_date);
+            $isOverdue = $order->due_date && now()->gt($order->due_date);
+            $daysOverdue = $isOverdue ? now()->diffInDays($order->due_date) : 0;
+
+            // Calculate potential interest if applicable
+            $interestRate = $business->getEffectiveInterestRate();
+            $orderInterest = 0;
+            if ($interestRate > 0) {
+                $dailyRate = $interestRate / 365 / 100;
+                $orderInterest = round($order->outstanding_amount * $dailyRate * $daysSinceOrder, 2);
+            }
+
+            $totalPrincipal += $order->outstanding_amount;
+            $potentialInterest += $orderInterest;
+
+            $spendingBreakdown[] = [
+                'po_number' => $order->po_number,
+                'vendor_name' => $order->vendor->name,
+                'order_date' => $order->order_date->format('Y-m-d'),
+                'due_date' => $order->due_date,
+                'description' => $order->description ?? 'No description',
+                'net_amount' => $order->net_amount,
+                'paid_amount' => $order->total_paid_amount,
+                'outstanding_amount' => $order->outstanding_amount,
+                'days_since_order' => $daysSinceOrder,
+                'is_overdue' => $isOverdue,
+                'days_overdue' => $daysOverdue,
+                'potential_interest' => $orderInterest,
+                'payment_status' => $order->payment_status,
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Spending analysis retrieved successfully',
+            'data' => [
+                'summary' => [
+                    'total_outstanding_debt' => $totalPrincipal,
+                    'potential_interest_if_applicable' => $potentialInterest,
+                    'total_orders_outstanding' => count($spendingBreakdown),
+                    'overdue_orders' => collect($spendingBreakdown)->where('is_overdue', true)->count(),
+                    'average_order_age' => collect($spendingBreakdown)->avg('days_since_order'),
+                ],
+                'spending_breakdown' => $spendingBreakdown,
+                'interest_info' => [
+                    'current_rate' => $business->getEffectiveInterestRate(),
+                    'interest_applicable' => $business->getEffectiveInterestRate() > 0,
+                    'rate_source' => $business->custom_interest_rate ? 'Custom Rate' :
+                                    ($business->riskTier ? 'Risk Tier' : 'System Default'),
+                ]
+            ]
+        ]);
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/api/business/payments/pending",
+     *     summary="Get pending payments awaiting admin approval",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Pending payments retrieved")
+     * )
+     */
+    public function getPendingPayments()
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $pendingPayments = $business->payments()
+            ->where('status', 'pending')
+            ->with(['purchaseOrder.vendor'])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        $totalPendingAmount = $pendingPayments->sum('amount');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Pending payments retrieved successfully',
+            'data' => [
+                'pending_payments' => $pendingPayments,
+                'summary' => [
+                    'total_pending_payments' => $pendingPayments->count(),
+                    'total_pending_amount' => $totalPendingAmount,
+                    'potential_credit_restoration' => $totalPendingAmount,
+                    'current_available_spending' => $business->getAvailableSpendingPower(),
+                    'spending_after_approval' => $business->getAvailableSpendingPower() + $totalPendingAmount,
+                ]
+            ]
+        ]);
+    }
+
+    /**
+     * Generate unique payment reference
+     */
+    private function generatePaymentReference(): string
+    {
+        $prefix = 'PAY';
+        $year = date('Y');
+        $month = date('m');
+
+        // Generate random suffix
+        $suffix = strtoupper(Str::random(6));
+
+        // Ensure uniqueness
+        do {
+            $reference = $prefix . $year . $month . $suffix;
+            $suffix = strtoupper(Str::random(6));
+        } while (Payment::where('payment_reference', $reference)->exists());
+
+        return $reference;
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/api/business/vendors",
+     *     summary="Get business vendors",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Vendors retrieved")
+     * )
+     */
+    public function getVendors()
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $vendors = $business->vendors()
+            ->withCount('purchaseOrders')
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Vendors retrieved successfully',
+            'data' => $vendors
+        ]);
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/api/business/purchase-orders",
+     *     summary="Get business purchase orders",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Purchase orders retrieved")
+     * )
+     */
+    public function getPurchaseOrders(Request $request)
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $query = $business->purchaseOrders()->with(['vendor', 'payments']);
+
+        // Filter by status if provided
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        // Filter by payment status if provided
+        if ($request->filled('payment_status')) {
+            $query->where('payment_status', $request->payment_status);
+        }
+
+        $purchaseOrders = $query->orderBy('created_at', 'desc')->paginate(20);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Purchase orders retrieved successfully',
+            'data' => $purchaseOrders
+        ]);
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/api/business/spending-suggestions",
+     *     summary="Get spending suggestions based on available credit",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Spending suggestions retrieved")
+     * )
+     */
+    public function getSpendingSuggestions()
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $availableSpending = $business->getAvailableSpendingPower();
+        $outstandingDebt = $business->getOutstandingDebt();
+        $paymentScore = $business->getPaymentScore();
+
+        $suggestions = [];
+
+        // Spending suggestions
+        if ($availableSpending > 0) {
+            $suggestions[] = [
+                'type' => 'spending_opportunity',
+                'title' => 'Available Spending Power',
+                'message' => "You have $" . number_format($availableSpending, 2) . " available for new purchase orders.",
+                'action' => 'Create new PO',
+                'priority' => 'info'
+            ];
+        } else {
+            $suggestions[] = [
+                'type' => 'no_spending_power',
+                'title' => 'No Spending Power',
+                'message' => 'Make payments to restore your spending power.',
+                'action' => 'Submit payment',
+                'priority' => 'warning'
+            ];
+        }
+
+        // Payment suggestions
+        if ($outstandingDebt > 0) {
+            $urgency = $outstandingDebt > ($business->getTotalAssignedCredit() * 0.8) ? 'high' : 'medium';
+            $suggestions[] = [
+                'type' => 'payment_suggestion',
+                'title' => 'Outstanding Debt',
+                'message' => "You have $" . number_format($outstandingDebt, 2) . " in outstanding debt.",
+                'action' => 'Make payment to restore credit',
+                'priority' => $urgency === 'high' ? 'danger' : 'warning'
+            ];
+        }
+
+        // Performance suggestions
+        if ($paymentScore < 80 && $paymentScore > 0) {
+            $suggestions[] = [
+                'type' => 'performance_improvement',
+                'title' => 'Improve Payment Score',
+                'message' => "Your payment score is {$paymentScore}%. Consistent payments can improve your terms.",
+                'action' => 'Make timely payments',
+                'priority' => 'info'
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Spending suggestions retrieved successfully',
+            'data' => [
+                'suggestions' => $suggestions,
+                'current_status' => [
+                    'available_spending' => $availableSpending,
+                    'outstanding_debt' => $outstandingDebt,
+                    'payment_score' => $paymentScore,
+                    'utilization' => $business->getSpendingPowerUtilization(),
+                ]
+            ]
+        ]);
     }
 }
