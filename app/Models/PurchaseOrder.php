@@ -82,49 +82,47 @@ class PurchaseOrder extends Model
     {
         return $this->hasMany(Payment::class)->where('status', 'pending');
     }
+public function scopePending($query)
+{
+    return $query->where('purchase_orders.status', 'pending');
+}
 
+public function scopeApproved($query)
+{
+    return $query->where('purchase_orders.status', 'approved');
+}
+
+public function scopeDraft($query)
+{
+    return $query->where('purchase_orders.status', 'draft');
+}
+
+public function scopeForBusiness($query, $businessId)
+{
+    return $query->where('purchase_orders.business_id', $businessId);
+}
+
+public function scopeUnpaid($query)
+{
+    return $query->where('purchase_orders.payment_status', 'unpaid');
+}
+
+public function scopePartiallyPaid($query)
+{
+    return $query->where('purchase_orders.payment_status', 'partially_paid');
+}
+
+public function scopeFullyPaid($query)
+{
+    return $query->where('purchase_orders.payment_status', 'fully_paid');
+}
+
+public function scopeOverdue($query)
+{
+    return $query->where('purchase_orders.due_date', '<', now())
+                ->whereIn('purchase_orders.payment_status', ['unpaid', 'partially_paid']);
+}
     // Scopes
-    public function scopePending($query)
-    {
-        return $query->where('status', 'pending');
-    }
-
-    public function scopeApproved($query)
-    {
-        return $query->where('status', 'approved');
-    }
-
-    public function scopeDraft($query)
-    {
-        return $query->where('status', 'draft');
-    }
-
-    public function scopeForBusiness($query, $businessId)
-    {
-        return $query->where('business_id', $businessId);
-    }
-
-    public function scopeUnpaid($query)
-    {
-        return $query->where('payment_status', 'unpaid');
-    }
-
-    public function scopePartiallyPaid($query)
-    {
-        return $query->where('payment_status', 'partially_paid');
-    }
-
-    public function scopeFullyPaid($query)
-    {
-        return $query->where('payment_status', 'fully_paid');
-    }
-
-    public function scopeOverdue($query)
-    {
-        return $query->where('due_date', '<', now())
-                    ->whereIn('payment_status', ['unpaid', 'partially_paid']);
-    }
-
     // Helper methods
     public function isOverdue()
     {

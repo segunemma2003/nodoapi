@@ -1425,71 +1425,6 @@ public function rejectBusinessRepayment(Request $request, Business $business, Pa
 /**
  * Override the existing getBusinesses method with enhanced data
  */
-public function getBusinessesEnhanced(Request $request)
-{
-    $query = Business::with(['riskTier', 'createdBy']);
-
-    // Filters
-    if ($request->filled('status')) {
-        $query->where('is_active', $request->status === 'active');
-    }
-    if ($request->filled('high_utilization')) {
-        $query->whereRaw('(credit_balance / current_balance) > 0.8');
-    }
-    if ($request->filled('min_credit')) {
-        $query->where('current_balance', '>=', $request->min_credit);
-    }
-    if ($request->filled('has_debt')) {
-        $query->where('credit_balance', '>', 0);
-    }
-
-    $businesses = $query->orderBy('created_at', 'desc')->paginate(20);
-
-    // Enhanced business data with comprehensive metrics
-    $businesses->getCollection()->transform(function ($business) {
-        // Calculate metrics
-        $totalPOs = $business->purchaseOrders()->count();
-        $lastActivity = $business->purchaseOrders()->latest()->first()?->created_at
-                       ?? $business->payments()->latest()->first()?->created_at
-                       ?? $business->updated_at;
-
-        $business->enhanced_metrics = [
-            'current_balance' => $business->current_balance,
-            'available_balance' => $business->available_balance,
-            'credit_balance' => $business->credit_balance,
-            'credit_utilization' => $business->getCreditUtilization(),
-            'spending_power_utilization' => $business->getSpendingPowerUtilization(),
-            'payment_score' => $business->getPaymentScore(),
-            'total_pos' => $totalPOs,
-            'pending_pos' => $business->purchaseOrders()->where('status', 'pending')->count(),
-            'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
-            'pending_payments' => $business->payments()->where('status', 'pending')->count(),
-            'total_spent' => $business->purchaseOrders()->sum('net_amount'),
-            'total_repaid' => $business->payments()->where('status', 'confirmed')->sum('amount'),
-            'last_activity' => $lastActivity?->format('Y-m-d'),
-            'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
-            'effective_interest_rate' => $business->getEffectiveInterestRate(),
-            'potential_monthly_interest' => $business->calculatePotentialInterest(30),
-            'risk_level' => $this->calculateRiskLevel($business),
-        ];
-
-        return $business;
-    });
-
-    return response()->json([
-        'success' => true,
-        'message' => 'Businesses retrieved successfully',
-        'data' => $businesses,
-        'platform_summary' => [
-            'total_businesses' => Business::count(),
-            'active_businesses' => Business::where('is_active', true)->count(),
-            'total_assigned_credit' => Business::sum('current_balance'),
-            'total_outstanding_debt' => Business::sum('credit_balance'),
-            'average_utilization' => Business::avg(DB::raw('(credit_balance / current_balance) * 100')),
-            'high_risk_businesses' => Business::whereRaw('(credit_balance / current_balance) > 0.8')->count(),
-        ]
-    ]);
-}
 
 /**
  * Calculate risk level for business
@@ -1633,6 +1568,97 @@ public function updateAdminProfile(Request $request)
             'message' => 'Failed to update admin profile',
             'error' => $e->getMessage()
         ], 500);
+
     }
+}
+
+
+/**
+ * Enhanced businesses with corrected SQL queries
+ */
+public function getBusinessesEnhanced(Request $request)
+{
+    $query = Business::with(['riskTier', 'createdBy']);
+
+    // Filters
+    if ($request->filled('status')) {
+        $query->where('is_active', $request->status === 'active');
+    }
+    if ($request->filled('high_utilization')) {
+        $query->whereRaw('(credit_balance / current_balance) > 0.8');
+    }
+    if ($request->filled('min_credit')) {
+        $query->where('current_balance', '>=', $request->min_credit);
+    }
+    if ($request->filled('has_debt')) {
+        $query->where('credit_balance', '>', 0);
+    }
+
+    $businesses = $query->orderBy('created_at', 'desc')->paginate(20);
+
+    // Enhanced business data with comprehensive metrics
+    $businesses->getCollection()->transform(function ($business) {
+        // Calculate metrics safely with qualified column names
+        $totalPOs = $business->purchaseOrders()->count();
+
+        // Use separate queries to avoid ambiguity
+        $lastPOActivity = $business->purchaseOrders()->latest('created_at')->first()?->created_at;
+        $lastPaymentActivity = $business->directPayments()->latest('created_at')->first()?->created_at;
+
+        $lastActivity = null;
+        if ($lastPOActivity && $lastPaymentActivity) {
+            $lastActivity = max($lastPOActivity, $lastPaymentActivity);
+        } elseif ($lastPOActivity) {
+            $lastActivity = $lastPOActivity;
+        } elseif ($lastPaymentActivity) {
+            $lastActivity = $lastPaymentActivity;
+        } else {
+            $lastActivity = $business->updated_at;
+        }
+
+        $business->enhanced_metrics = [
+            'current_balance' => $business->current_balance,
+            'available_balance' => $business->available_balance,
+            'credit_balance' => $business->credit_balance,
+            'credit_utilization' => $business->getCreditUtilization(),
+            'spending_power_utilization' => $business->getSpendingPowerUtilization(),
+            'payment_score' => $business->getPaymentScore(),
+            'total_pos' => $totalPOs,
+            'pending_pos' => $business->purchaseOrders()
+                ->where('purchase_orders.status', 'pending') // Qualified column name
+                ->count(),
+            'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
+            'pending_payments' => $business->directPayments()
+                ->where('payments.status', 'pending') // Qualified column name
+                ->count(),
+            'total_spent' => $business->purchaseOrders()->sum('net_amount'),
+            'total_repaid' => $business->directPayments()
+                ->where('payments.status', 'confirmed') // Qualified column name
+                ->sum('amount'),
+            'last_activity' => $lastActivity?->format('Y-m-d'),
+            'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
+            'effective_interest_rate' => $business->getEffectiveInterestRate(),
+            'potential_monthly_interest' => $business->calculatePotentialInterest(30),
+            'risk_level' => $this->calculateRiskLevel($business),
+        ];
+
+        return $business;
+    });
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Businesses retrieved successfully',
+        'data' => $businesses,
+        'platform_summary' => [
+            'total_businesses' => Business::count(),
+            'active_businesses' => Business::where('is_active', true)->count(),
+            'total_assigned_credit' => Business::sum('current_balance'),
+            'total_outstanding_debt' => Business::sum('credit_balance'),
+            'average_utilization' => Business::where('current_balance', '>', 0)
+                ->selectRaw('AVG((credit_balance / current_balance) * 100) as avg_util')
+                ->value('avg_util') ?? 0,
+            'high_risk_businesses' => Business::whereRaw('(credit_balance / current_balance) > 0.8')->count(),
+        ]
+    ]);
 }
 }

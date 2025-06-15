@@ -78,10 +78,6 @@ class Business extends Authenticatable
         return $this->hasMany(BalanceTransaction::class);
     }
 
-    public function payments()
-    {
-        return $this->hasManyThrough(Payment::class, PurchaseOrder::class);
-    }
 
     public function directPayments()
     {
@@ -274,7 +270,11 @@ class Business extends Authenticatable
             throw $e;
         }
     }
-
+public function payments()
+{
+    return $this->hasManyThrough(Payment::class, PurchaseOrder::class)
+                ->select('payments.*'); // Explicitly select from payments table
+}
     /**
      * 5. ADMIN REJECTS PAYMENT
      * - No balance changes
@@ -609,7 +609,11 @@ class Business extends Authenticatable
 
         return round(($onTimePayments / $totalPayments) * 100, 2);
     }
-
+public function confirmedPayments()
+{
+    return $this->hasManyThrough(Payment::class, PurchaseOrder::class)
+                ->where('payments.status', 'confirmed'); // Qualify the status column
+}
     public function getAveragePaymentTime()
     {
         return $this->payments()
@@ -1073,6 +1077,14 @@ public function getRiskIndicators()
         'suggested_actions' => $this->getSuggestedActions(),
     ];
 }
+
+public function getConfirmedPaymentsCount()
+{
+    return $this->hasManyThrough(Payment::class, PurchaseOrder::class)
+                ->where('payments.status', 'confirmed') // Specify payments.status
+                ->count();
+}
+
 
 /**
  * Get comprehensive business metrics for admin dashboard

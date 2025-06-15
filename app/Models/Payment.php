@@ -59,6 +59,7 @@ class Payment extends Model
         return $this->belongsTo(User::class, 'rejected_by');
     }
 
+
     // Scopes
     public function scopePending($query)
     {
