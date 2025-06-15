@@ -19,7 +19,7 @@
             "description": "Local Development Server"
         },
         {
-            "url": "https://api.yourdomain.com",
+            "url": "hhttps://nodopayapi-419811b691e7.herokuapp.com",
             "description": "Production Server"
         }
     ],
@@ -29,7 +29,7 @@
                 "tags": [
                     "Admin"
                 ],
-                "summary": "Get admin dashboard data",
+                "summary": "Get admin dashboard with platform overview",
                 "operationId": "a4e953abeda97cdeaa1c2af786aea1f3",
                 "responses": {
                     "200": {
@@ -44,11 +44,28 @@
             }
         },
         "/api/admin/businesses": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get all businesses with their credit status",
+                "operationId": "799e97fc8685289c83e8986ac7be8031",
+                "responses": {
+                    "200": {
+                        "description": "Businesses retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
             "post": {
                 "tags": [
                     "Admin"
                 ],
-                "summary": "Create a new business",
+                "summary": "Create business and assign initial credit",
                 "operationId": "01cbb2c6194deb1932bf9485372f6821",
                 "requestBody": {
                     "required": true,
@@ -58,7 +75,8 @@
                                 "required": [
                                     "name",
                                     "email",
-                                    "business_type"
+                                    "business_type",
+                                    "initial_credit"
                                 ],
                                 "properties": {
                                     "name": {
@@ -74,7 +92,7 @@
                                         "type": "string",
                                         "example": "Technology"
                                     },
-                                    "available_balance": {
+                                    "initial_credit": {
                                         "type": "number",
                                         "format": "float",
                                         "example": 50000
@@ -87,7 +105,614 @@
                 },
                 "responses": {
                     "201": {
-                        "description": "Business created successfully"
+                        "description": "Business created with assigned credit"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/payments/pending": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get all pending payments awaiting approval",
+                "operationId": "3ecc1d8caa7ae312c791f29ee49b7ae6",
+                "responses": {
+                    "200": {
+                        "description": "Pending payments retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/payments/{payment}/approve": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Approve payment and restore business spending power",
+                "operationId": "87a66afc0135647bb15ddd511cd9742e",
+                "parameters": [
+                    {
+                        "name": "payment",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "notes": {
+                                        "type": "string",
+                                        "example": "Payment verified and approved"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Payment approved - spending power restored"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/payments/{payment}/reject": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Reject payment submission",
+                "operationId": "70bda1351ff9e097b8eab71cfe92da51",
+                "responses": {
+                    "200": {
+                        "description": "Payment rejected"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/businesses/{business}/adjust-credit": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Adjust business assigned credit limit",
+                "operationId": "8b2c94e3e1a9ce1093d32a2ce4a6b86c",
+                "responses": {
+                    "200": {
+                        "description": "Credit limit adjusted"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/businesses/{business}/apply-interest": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Apply interest charges to business (optional)",
+                "operationId": "05a44d549b1f704ede0a9943cb441956",
+                "responses": {
+                    "200": {
+                        "description": "Interest applied"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/businesses/{business}/treasury/update": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Update platform treasury for business (admin funds management)",
+                "operationId": "c9459bb7f5ad71ed2ee9e17beaf34bb2",
+                "responses": {
+                    "200": {
+                        "description": "Treasury updated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/businesses/{business}": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get detailed business information",
+                "operationId": "4070214c75ec6b9b33a79783e1978c08",
+                "responses": {
+                    "200": {
+                        "description": "Business details retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/bulk-interest-application": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Apply interest to multiple businesses with outstanding debt",
+                "operationId": "89c9dc3211c7a035b128e6952144926d",
+                "responses": {
+                    "200": {
+                        "description": "Bulk interest application completed"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/platform-summary": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get platform financial summary",
+                "operationId": "73ffac8e3927a2181a3b42a7d4ec1500",
+                "responses": {
+                    "200": {
+                        "description": "Platform summary retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/purchase-orders": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get all purchase orders across platform",
+                "operationId": "82c1d7fab2aca8a28296b2f70d212977",
+                "responses": {
+                    "200": {
+                        "description": "Purchase orders retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/purchase-orders/{po}": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get specific purchase order details",
+                "operationId": "32b1f5f35c9fc63a40ad14c6194fc3ea",
+                "responses": {
+                    "200": {
+                        "description": "Purchase order details retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/purchase-orders/{po}/approve": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Approve purchase order",
+                "operationId": "920de51ad31eca8b12ba09350e575e4e",
+                "responses": {
+                    "200": {
+                        "description": "Purchase order approved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/purchase-orders/{po}/reject": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Reject purchase order",
+                "operationId": "0746c0199b9cc3ae59986c4322aaa83d",
+                "responses": {
+                    "200": {
+                        "description": "Purchase order rejected"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/purchase-orders/{po}/update-status": {
+            "put": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Update purchase order status",
+                "operationId": "c3235f6aa665b741d87742479a38f32b",
+                "responses": {
+                    "200": {
+                        "description": "Purchase order status updated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/users": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get all users in the system",
+                "operationId": "856970fa5fec51a8e7e9f6f35977523e",
+                "responses": {
+                    "200": {
+                        "description": "Users retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Create new user",
+                "operationId": "b350ff381bd394706e418a5a5b508eba",
+                "responses": {
+                    "201": {
+                        "description": "User created"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/users/{user}": {
+            "put": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Update user",
+                "operationId": "23ea218347ad809659b916d9301fdca4",
+                "responses": {
+                    "200": {
+                        "description": "User updated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
+            "delete": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Delete user",
+                "operationId": "07811c879f82c87932551b727e3c6533",
+                "responses": {
+                    "200": {
+                        "description": "User deleted"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/payments/history": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get comprehensive payment history",
+                "operationId": "33193fcfdfe9f7fe9c88a5653506397f",
+                "responses": {
+                    "200": {
+                        "description": "Payment history retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/transactions/recent": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get recent balance transactions across platform",
+                "operationId": "c7399d0ca687c6b48ad549e42f6e8c06",
+                "responses": {
+                    "200": {
+                        "description": "Recent transactions retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/businesses/{business}/repayments": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get repayment history for specific business",
+                "operationId": "a78875719233aba1b1ae1933a44c2bdb",
+                "responses": {
+                    "200": {
+                        "description": "Business repayments retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/businesses/{business}/repayments/{payment}/approve": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Approve specific repayment (alias for payment approval)",
+                "operationId": "72e02086d9ea4bb50cb990ab7649596d",
+                "responses": {
+                    "200": {
+                        "description": "Repayment approved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/businesses/{business}/repayments/{payment}/reject": {
+            "post": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Reject specific repayment (alias for payment rejection)",
+                "operationId": "f52b064ee4300d890f53025e68769aa8",
+                "responses": {
+                    "200": {
+                        "description": "Repayment rejected"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/support/tickets": {
+            "get": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Get all support tickets with filtering",
+                "operationId": "518f8fb753c46ac4d24a7426fcccf91e",
+                "responses": {
+                    "200": {
+                        "description": "Support tickets retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
+            "post": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Create new support ticket",
+                "operationId": "0968e89bd2a25f22710fba34e1232309",
+                "responses": {
+                    "201": {
+                        "description": "Support ticket created"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/support/tickets/{ticket}": {
+            "get": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Get specific ticket details",
+                "operationId": "094a5a09a5427f2554d2e8ab237c0538",
+                "responses": {
+                    "200": {
+                        "description": "Ticket details retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
+            "put": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Update ticket (status, priority, assignment)",
+                "operationId": "66484616036f41d4654e2f247f997c29",
+                "responses": {
+                    "200": {
+                        "description": "Ticket updated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/support/tickets/{ticket}/assign": {
+            "post": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Assign ticket to staff",
+                "operationId": "8146d12bd7805652dc9c976c477728a2",
+                "responses": {
+                    "200": {
+                        "description": "Ticket assigned"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/support/tickets/{ticket}/close": {
+            "post": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Close ticket with resolution",
+                "operationId": "c7e31761ad6062c7064e8fd6cae9db2c",
+                "responses": {
+                    "200": {
+                        "description": "Ticket closed"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/support/tickets/{ticket}/response": {
+            "post": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Add response to ticket",
+                "operationId": "1991b64657e768a6607320930e9e5339",
+                "responses": {
+                    "201": {
+                        "description": "Response added"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/support/stats": {
+            "get": {
+                "tags": [
+                    "Admin Support"
+                ],
+                "summary": "Get support statistics",
+                "operationId": "83db88e5d59b8e896840051913fc01d8",
+                "responses": {
+                    "200": {
+                        "description": "Support statistics retrieved"
                     }
                 },
                 "security": [
@@ -259,6 +884,189 @@
                 ]
             }
         },
+        "/api/auth/change-password": {
+            "post": {
+                "tags": [
+                    "Authentication"
+                ],
+                "summary": "Change password for authenticated user (Admin or Business)",
+                "operationId": "58e67cdbde52513b62902b05abf9abcb",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "current_password",
+                                    "new_password",
+                                    "new_password_confirmation"
+                                ],
+                                "properties": {
+                                    "current_password": {
+                                        "type": "string",
+                                        "format": "password"
+                                    },
+                                    "new_password": {
+                                        "type": "string",
+                                        "format": "password",
+                                        "minLength": 8
+                                    },
+                                    "new_password_confirmation": {
+                                        "type": "string",
+                                        "format": "password"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Password changed successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/profile": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get business profile information",
+                "operationId": "69d835afe21e4ac4aeeb7d33efe774ca",
+                "responses": {
+                    "200": {
+                        "description": "Business profile retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
+            "put": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Update business profile information",
+                "operationId": "94243a8376b6868e5ef049a71763d76a",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "maxLength": 255
+                                    },
+                                    "phone": {
+                                        "type": "string",
+                                        "maxLength": 20
+                                    },
+                                    "address": {
+                                        "type": "string"
+                                    },
+                                    "business_type": {
+                                        "type": "string",
+                                        "maxLength": 100
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Business profile updated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/profile/upload-logo": {
+            "post": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Upload business logo",
+                "operationId": "7b800d1297aa60212b56c8305d27a935",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "properties": {
+                                    "logo": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Logo uploaded successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/admin/profile": {
+            "get": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Get admin profile information",
+                "operationId": "6143715d4cbd55921960ea29f3b91355",
+                "responses": {
+                    "200": {
+                        "description": "Admin profile retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
+            "put": {
+                "tags": [
+                    "Admin"
+                ],
+                "summary": "Update admin profile information",
+                "operationId": "55e64f0e1b240eae31b29fdd6bb1cad5",
+                "responses": {
+                    "200": {
+                        "description": "Admin profile updated"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
         "/api/business/dashboard": {
             "get": {
                 "tags": [
@@ -279,41 +1087,29 @@
             }
         },
         "/api/business/vendors": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get business vendors",
+                "operationId": "026528986b062550b807bd9f3e1b6fdc",
+                "responses": {
+                    "200": {
+                        "description": "Vendors retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
             "post": {
                 "tags": [
                     "Business"
                 ],
                 "summary": "Create a new vendor",
                 "operationId": "422fb9d58c9b9b99dda4204ef2ed859e",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "required": [
-                                    "name",
-                                    "email"
-                                ],
-                                "properties": {
-                                    "name": {
-                                        "type": "string",
-                                        "example": "Supplier ABC"
-                                    },
-                                    "email": {
-                                        "type": "string",
-                                        "format": "email",
-                                        "example": "supplier@abc.com"
-                                    },
-                                    "category": {
-                                        "type": "string",
-                                        "example": "Office Supplies"
-                                    }
-                                },
-                                "type": "object"
-                            }
-                        }
-                    }
-                },
                 "responses": {
                     "201": {
                         "description": "Vendor created successfully"
@@ -327,11 +1123,28 @@
             }
         },
         "/api/business/purchase-orders": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get business purchase orders",
+                "operationId": "32a05bc14b57166fb1342eebdedce8ea",
+                "responses": {
+                    "200": {
+                        "description": "Purchase orders retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
             "post": {
                 "tags": [
                     "Business"
                 ],
-                "summary": "Create purchase order",
+                "summary": "Create purchase order (Platform pays vendor directly)",
                 "operationId": "7a8308ea3c47886e073c42ece6747393",
                 "requestBody": {
                     "required": true,
@@ -340,7 +1153,8 @@
                             "schema": {
                                 "required": [
                                     "vendor_id",
-                                    "order_date"
+                                    "order_date",
+                                    "net_amount"
                                 ],
                                 "properties": {
                                     "vendor_id": {
@@ -352,34 +1166,22 @@
                                         "format": "date",
                                         "example": "2024-01-15"
                                     },
+                                    "net_amount": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 5000
+                                    },
                                     "status": {
                                         "type": "string",
                                         "enum": [
                                             "draft",
                                             "pending"
                                         ],
-                                        "example": "draft"
+                                        "example": "pending"
                                     },
-                                    "items": {
-                                        "type": "array",
-                                        "items": {
-                                            "properties": {
-                                                "description": {
-                                                    "type": "string",
-                                                    "example": "Office supplies"
-                                                },
-                                                "quantity": {
-                                                    "type": "number",
-                                                    "example": 10
-                                                },
-                                                "unit_price": {
-                                                    "type": "number",
-                                                    "format": "float",
-                                                    "example": 25.5
-                                                }
-                                            },
-                                            "type": "object"
-                                        }
+                                    "description": {
+                                        "type": "string",
+                                        "example": "Office equipment purchase"
                                     }
                                 },
                                 "type": "object"
@@ -389,7 +1191,177 @@
                 },
                 "responses": {
                     "201": {
-                        "description": "Purchase order created"
+                        "description": "Purchase order created - platform will pay vendor"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/purchase-orders/{po}/payments": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get payment history for purchase order",
+                "operationId": "ad22d7ce19556f662bee7c8e40b6196a",
+                "responses": {
+                    "200": {
+                        "description": "Payment history retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            },
+            "post": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Submit payment to restore spending power",
+                "operationId": "d036e4c8540cc34df776e45a385c5157",
+                "parameters": [
+                    {
+                        "name": "po",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "required": [
+                                    "amount",
+                                    "receipt"
+                                ],
+                                "properties": {
+                                    "amount": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 1000
+                                    },
+                                    "receipt": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    },
+                                    "notes": {
+                                        "type": "string",
+                                        "example": "Payment to restore spending power"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Payment submitted - awaiting admin approval to restore credit"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/credit-status": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get credit and spending power status",
+                "operationId": "71b528860fb1008dcc46d23ff9001603",
+                "responses": {
+                    "200": {
+                        "description": "Credit status retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/spending-analysis": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get detailed spending and debt analysis",
+                "operationId": "3331239f5bab4a270bac0d660469864c",
+                "responses": {
+                    "200": {
+                        "description": "Spending analysis retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/payments/pending": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get pending payments awaiting admin approval",
+                "operationId": "0f7d16aae3a3d2e1abb679cfdbf4d73e",
+                "responses": {
+                    "200": {
+                        "description": "Pending payments retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/spending-suggestions": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get spending suggestions based on available credit",
+                "operationId": "167bf543b635c32d6944e9e649b67642",
+                "responses": {
+                    "200": {
+                        "description": "Spending suggestions retrieved"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctumAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/business/purchase-tracker": {
+            "get": {
+                "tags": [
+                    "Business"
+                ],
+                "summary": "Get purchase order analytics and spending insights",
+                "operationId": "2181d9331d0e7f2df7aabbcbd2d84210",
+                "responses": {
+                    "200": {
+                        "description": "Purchase tracker data retrieved"
                     }
                 },
                 "security": [
@@ -413,7 +1385,11 @@
     "tags": [
         {
             "name": "Admin",
-            "description": "Admin operations"
+            "description": "Admin operations - Credit & Payment Management"
+        },
+        {
+            "name": "Admin Support",
+            "description": "Support ticket management for administrators"
         },
         {
             "name": "Authentication",
@@ -421,7 +1397,7 @@
         },
         {
             "name": "Business",
-            "description": "Business operations"
+            "description": "Business operations - Revolving Credit System"
         }
     ]
 }
