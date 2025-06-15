@@ -19,7 +19,7 @@
             "description": "Local Development Server"
         },
         {
-            "url": "hhttps://nodopayapi-419811b691e7.herokuapp.com",
+            "url": "https://nodopayapi-419811b691e7.herokuapp.com",
             "description": "Production Server"
         }
     ],
