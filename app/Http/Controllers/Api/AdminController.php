@@ -1622,7 +1622,7 @@ public function getBusinessesEnhanced(Request $request)
             'credit_balance' => $business->credit_balance,
             'credit_utilization' => $business->getCreditUtilization(),
             'spending_power_utilization' => $business->getSpendingPowerUtilization(),
-            'payment_score' => $business->getPaymentScore(),
+            // 'payment_score' => $business->getPaymentScore(),
             'total_pos' => $totalPOs,
         //     'pending_pos' => $business->purchaseOrders()
         //         ->where('purchase_orders.status', 'pending') // Qualified column name
