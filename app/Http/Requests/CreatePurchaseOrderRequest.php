@@ -18,12 +18,12 @@ class CreatePurchaseOrderRequest extends FormRequest
             'items' => 'required|array|min:1|max:50',
             'items.*.description' => 'required|string|max:255',
             'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
-            'items.*.unit_price' => 'required|numeric|min:0|max:9999999999.99',
+            'items.*.unit_price' => 'required|numeric|min:0',
             'order_date' => 'required|date|before_or_equal:today',
             'expected_delivery_date' => 'nullable|date|after:order_date',
             'notes' => 'nullable|string|max:1000',
-            'tax_amount' => 'nullable|numeric|min:0|max:9999999999.99',
-            'discount_amount' => 'nullable|numeric|min:0|max:9999999999.99',
+            'tax_amount' => 'nullable|numeric|min:0',
+            'discount_amount' => 'nullable|numeric|min:0',
         ];
     }
 

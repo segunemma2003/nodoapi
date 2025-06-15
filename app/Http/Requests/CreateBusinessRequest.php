@@ -20,8 +20,8 @@ class CreateBusinessRequest extends FormRequest
             'address' => 'nullable|string|max:500',
             'business_type' => 'required|string|max:100',
             'registration_number' => 'nullable|string|unique:businesses,registration_number',
-            'credit_limit' => 'nullable|numeric|min:0|max:9999999999999.99',
-            'available_balance' => 'nullable|numeric|min:0|max:9999999999999.99',
+            'credit_limit' => 'nullable|numeric|min:0',
+            'available_balance' => 'nullable|numeric|min:0',
         ];
     }
 

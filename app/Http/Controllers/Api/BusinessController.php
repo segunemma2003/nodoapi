@@ -169,7 +169,7 @@ class BusinessController extends Controller
 
         $request->validate([
             'vendor_id' => 'required|exists:vendors,id',
-            'net_amount' => 'required|numeric|min:1|max:9999999999.99',
+            'net_amount' => 'required|numeric|min:1',
             'order_date' => 'required|date|before_or_equal:today',
             'expected_delivery_date' => 'nullable|date|after:order_date',
             'description' => 'required|string|max:500',

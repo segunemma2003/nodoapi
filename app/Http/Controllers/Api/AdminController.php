@@ -119,7 +119,7 @@ class AdminController extends Controller
             'address' => 'nullable|string',
             'business_type' => 'required|string|max:100',
             'registration_number' => 'nullable|string|unique:businesses,registration_number',
-            'initial_credit' => 'required|numeric|min:1000|max:10000000',
+            'initial_credit' => 'required|numeric|min:1000|',
         ]);
 
         // Generate random password
@@ -363,7 +363,7 @@ class AdminController extends Controller
     public function adjustAssignedCredit(Request $request, Business $business)
     {
         $request->validate([
-            'new_credit_amount' => 'required|numeric|min:0|max:50000000',
+            'new_credit_amount' => 'required|numeric|min:0',
             'reason' => 'required|string|max:500',
         ]);
 
@@ -420,7 +420,7 @@ class AdminController extends Controller
     public function applyInterest(Request $request, Business $business)
     {
         $request->validate([
-            'interest_amount' => 'required|numeric|min:1|max:999999',
+            'interest_amount' => 'required',
             'reason' => 'required|string|max:500',
         ]);
 
@@ -478,7 +478,7 @@ class AdminController extends Controller
     public function updateTreasury(Request $request, Business $business)
     {
         $request->validate([
-            'amount' => 'required|numeric|min:1|max:999999999',
+            'amount' => 'required|numeric',
             'operation' => 'required|in:add,subtract',
             'description' => 'required|string|max:500',
         ]);
