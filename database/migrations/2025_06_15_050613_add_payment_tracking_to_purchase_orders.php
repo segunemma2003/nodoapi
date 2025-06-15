@@ -30,9 +30,8 @@ return new class extends Migration
             $table->index('risk_tier_id');
         });
 
+        // Update existing purchase orders
         DB::statement('UPDATE purchase_orders SET outstanding_amount = net_amount WHERE outstanding_amount = 0');
-
-        // Set payment_status based on existing data if you have payments
         DB::statement("UPDATE purchase_orders SET payment_status = 'unpaid' WHERE payment_status IS NULL");
 
         Schema::table('businesses', function (Blueprint $table) {
@@ -49,13 +48,13 @@ return new class extends Migration
                   ->after('interest_rate');
         });
 
-        // Add indexes for performance
+        // Add indexes for performance with custom shorter names
         Schema::table('businesses', function (Blueprint $table) {
-            $table->index(['custom_interest_frequency', 'last_interest_applied_at']);
+            $table->index(['custom_interest_frequency', 'last_interest_applied_at'], 'businesses_interest_freq_applied_idx');
         });
 
         Schema::table('business_risk_tiers', function (Blueprint $table) {
-            $table->index(['interest_frequency', 'is_active']);
+            $table->index(['interest_frequency', 'is_active'], 'risk_tiers_freq_active_idx');
         });
     }
 
@@ -74,14 +73,17 @@ return new class extends Migration
             $table->dropColumn(['risk_tier_id', 'custom_interest_rate']);
         });
 
+        // Revert purchase order updates
         DB::statement('UPDATE purchase_orders SET outstanding_amount = 0');
         DB::statement("UPDATE purchase_orders SET payment_status = 'unpaid'");
 
         Schema::table('businesses', function (Blueprint $table) {
+            $table->dropIndex('businesses_interest_freq_applied_idx');
             $table->dropColumn(['custom_interest_frequency', 'last_interest_applied_at']);
         });
 
         Schema::table('business_risk_tiers', function (Blueprint $table) {
+            $table->dropIndex('risk_tiers_freq_active_idx');
             $table->dropColumn('interest_frequency');
         });
     }
