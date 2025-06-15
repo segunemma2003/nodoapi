@@ -1624,9 +1624,9 @@ public function getBusinessesEnhanced(Request $request)
             'spending_power_utilization' => $business->getSpendingPowerUtilization(),
             // 'payment_score' => $business->getPaymentScore(),
             'total_pos' => $totalPOs,
-        //     'pending_pos' => $business->purchaseOrders()
-        //         ->where('purchase_orders.status', 'pending') // Qualified column name
-        //         ->count(),
+            'pending_pos' => $business->purchaseOrders()
+                ->where('purchase_orders.status', 'pending') // Qualified column name
+                ->count(),
         //     'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
         //     'pending_payments' => $business->directPayments()
         //         ->where('payments.status', 'pending') // Qualified column name
