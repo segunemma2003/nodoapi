@@ -1616,10 +1616,10 @@ public function getBusinessesEnhanced(Request $request)
             $lastActivity = $business->updated_at;
         }
 
-        // $business->enhanced_metrics = [
-        //     'current_balance' => $business->current_balance,
-        //     'available_balance' => $business->available_balance,
-        //     'credit_balance' => $business->credit_balance,
+        $business->enhanced_metrics = [
+            'current_balance' => $business->current_balance,
+            'available_balance' => $business->available_balance,
+            'credit_balance' => $business->credit_balance,
         //     'credit_utilization' => $business->getCreditUtilization(),
         //     'spending_power_utilization' => $business->getSpendingPowerUtilization(),
         //     'payment_score' => $business->getPaymentScore(),
@@ -1640,7 +1640,7 @@ public function getBusinessesEnhanced(Request $request)
         //     'effective_interest_rate' => $business->getEffectiveInterestRate(),
         //     'potential_monthly_interest' => $business->calculatePotentialInterest(30),
         //     'risk_level' => $this->calculateRiskLevel($business),
-        // ];
+        ];
 
         return $business;
     });
