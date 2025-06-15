@@ -1621,9 +1621,9 @@ public function getBusinessesEnhanced(Request $request)
             'available_balance' => $business->available_balance,
             'credit_balance' => $business->credit_balance,
             'credit_utilization' => $business->getCreditUtilization(),
-        //     'spending_power_utilization' => $business->getSpendingPowerUtilization(),
-        //     'payment_score' => $business->getPaymentScore(),
-        //     'total_pos' => $totalPOs,
+            'spending_power_utilization' => $business->getSpendingPowerUtilization(),
+            'payment_score' => $business->getPaymentScore(),
+            'total_pos' => $totalPOs,
         //     'pending_pos' => $business->purchaseOrders()
         //         ->where('purchase_orders.status', 'pending') // Qualified column name
         //         ->count(),
@@ -1635,11 +1635,11 @@ public function getBusinessesEnhanced(Request $request)
         //     'total_repaid' => $business->directPayments()
         //         ->where('payments.status', 'confirmed') // Qualified column name
         //         ->sum('amount'),
-        //     'last_activity' => $lastActivity?->format('Y-m-d'),
-        //     'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
-        //     'effective_interest_rate' => $business->getEffectiveInterestRate(),
-        //     'potential_monthly_interest' => $business->calculatePotentialInterest(30),
-        //     'risk_level' => $this->calculateRiskLevel($business),
+            'last_activity' => $lastActivity?->format('Y-m-d'),
+            'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
+            'effective_interest_rate' => $business->getEffectiveInterestRate(),
+            'potential_monthly_interest' => $business->calculatePotentialInterest(30),
+            'risk_level' => $this->calculateRiskLevel($business),
         ];
 
         return $business;
