@@ -926,7 +926,7 @@ public function getPurchaseTracker(Request $request)
             ->whereYear('confirmed_at', $year)
             ->sum('amount'),
         'pending_payments' => $business->payments()->where('status', 'pending')->sum('amount'),
-        'payment_score' => $business->getPaymentScore(),
+        // 'payment_score' => $business->getPaymentScore(),
         'avg_payment_time' => $business->getAveragePaymentTime(),
     ];
 
