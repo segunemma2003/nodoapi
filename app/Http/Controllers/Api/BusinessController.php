@@ -922,10 +922,10 @@ public function getPurchaseTracker(Request $request)
 
     // Payment performance integration
     $paymentMetrics = [
-        'total_payments_made' => $business->payments()->where('status', 'confirmed')
+        'total_payments_made' => $business->directPayments()->where('payments.status', 'confirmed')
             ->whereYear('confirmed_at', $year)
             ->sum('amount'),
-        'pending_payments' => $business->payments()->where('status', 'pending')->sum('amount'),
+        // 'pending_payments' => $business->payments()->where('status', 'pending')->sum('amount'),
         // 'payment_score' => $business->getPaymentScore(),
         'avg_payment_time' => $business->getAveragePaymentTime(),
     ];
