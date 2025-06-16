@@ -147,8 +147,24 @@ class AdminController extends Controller
             // Send credentials email
             try {
                 Mail::to($business->email)->send(new BusinessCredentials($business, $password));
+                $emailStatus = 'sent';
+    $emailMessage = 'Credentials email sent successfully';
+
+    Log::info('Business credentials email sent successfully', [
+        'business_id' => $business->id,
+        'business_email' => $business->email,
+        'created_by' => Auth::id(),
+    ]);
             } catch (\Exception $e) {
-                Log::error('Failed to send credentials email: ' . $e->getMessage());
+               $emailStatus = 'failed';
+    $emailMessage = 'Failed to send credentials email: ' . $e->getMessage();
+
+    Log::error('Failed to send credentials email', [
+        'business_id' => $business->id,
+        'business_email' => $business->email,
+        'error' => $e->getMessage(),
+        'created_by' => Auth::id(),
+    ]);
             }
 
             return response()->json([

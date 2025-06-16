@@ -1,6 +1,6 @@
 /emails/business-credentials.blade.php
 @component('mail::message')
-# Welcome to Business Management Platform
+# Welcome to NodoPay Platform
 
 Hello {{ $business->name }},
 
