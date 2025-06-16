@@ -555,55 +555,68 @@ class Business extends Authenticatable
      */
 
     // FIXED: Use directPayments() to avoid join ambiguity
-    public function getPaymentScore()
+   public function getPaymentScore()
     {
-        $totalPayments = $this->directPayments()->where('status', 'confirmed')->count();
+        // Use direct relationship to avoid join ambiguity
+        $totalPayments = $this->directPayments()
+                             ->where('status', 'confirmed') // No ambiguity in direct relationship
+                             ->count();
 
         if ($totalPayments === 0) return 0;
 
-        // Count on-time payments using explicit table names and separate query to avoid joins
-        $onTimePayments = 0;
-
-        // Get confirmed payments with their purchase orders
-        $confirmedPayments = $this->directPayments()
+        // Count on-time payments using explicit table names
+        $onTimePayments = $this->directPayments()
             ->where('status', 'confirmed')
-            ->with('purchaseOrder')
-            ->get();
-
-        foreach ($confirmedPayments as $payment) {
-            if ($payment->purchaseOrder &&
-                $payment->confirmed_at &&
-                $payment->confirmed_at <= $payment->purchaseOrder->due_date) {
-                $onTimePayments++;
-            }
-        }
+            ->whereHas('purchaseOrder', function($query) {
+                $query->whereRaw('payments.confirmed_at <= purchase_orders.due_date');
+            })
+            ->count();
 
         return round(($onTimePayments / $totalPayments) * 100, 2);
     }
 
-    public function getAveragePaymentTime()
+
+     public function getTotalConfirmedPayments()
     {
-        // Use directPayments and load purchase orders separately to avoid ambiguous joins
-        $payments = $this->directPayments()
+        return $this->directPayments()
+                   ->where('status', 'confirmed')
+                   ->sum('amount');
+    }
+
+     public function getAveragePaymentTime()
+    {
+        return $this->directPayments()
             ->where('status', 'confirmed')
-            ->with('purchaseOrder')
-            ->get();
+            ->whereHas('purchaseOrder')
+            ->get()
+            ->avg(function($payment) {
+                return $payment->confirmed_at->diffInDays($payment->purchaseOrder->order_date);
+            });
+    }
 
-        if ($payments->isEmpty()) {
-            return 0;
-        }
+public function getActivitySummary($days = 30)
+    {
+        $startDate = now()->subDays($days);
 
-        $totalDays = 0;
-        $validPayments = 0;
-
-        foreach ($payments as $payment) {
-            if ($payment->purchaseOrder && $payment->confirmed_at) {
-                $totalDays += $payment->confirmed_at->diffInDays($payment->purchaseOrder->order_date);
-                $validPayments++;
-            }
-        }
-
-        return $validPayments > 0 ? round($totalDays / $validPayments, 2) : 0;
+        return [
+            'purchase_orders_created' => $this->purchaseOrders()
+                ->where('purchase_orders.created_at', '>=', $startDate) // Qualified
+                ->count(),
+            'payments_submitted' => $this->directPayments()
+                ->where('created_at', '>=', $startDate)
+                ->count(),
+            'payments_confirmed' => $this->directPayments()
+                ->where('confirmed_at', '>=', $startDate)
+                ->where('status', 'confirmed')
+                ->count(),
+            'total_spent' => $this->purchaseOrders()
+                ->where('purchase_orders.created_at', '>=', $startDate) // Qualified
+                ->sum('net_amount'),
+            'total_repaid' => $this->directPayments()
+                ->where('confirmed_at', '>=', $startDate)
+                ->where('status', 'confirmed')
+                ->sum('amount'),
+        ];
     }
 
     /**
@@ -878,28 +891,82 @@ class Business extends Authenticatable
     /**
      * Get business activity summary
      */
-    public function getActivitySummary($days = 30)
+public function getPaymentsWithExplicitJoin()
     {
-        $startDate = now()->subDays($days);
+        return Payment::join('purchase_orders', 'payments.purchase_order_id', '=', 'purchase_orders.id')
+                     ->where('purchase_orders.business_id', $this->id)
+                     ->select('payments.*'); // Explicitly select from payments table
+    }
 
+    /**
+     * Get confirmed payments sum with explicit qualification
+     */
+    public function getConfirmedPaymentsSum()
+    {
+        return Payment::join('purchase_orders', 'payments.purchase_order_id', '=', 'purchase_orders.id')
+                     ->where('purchase_orders.business_id', $this->id)
+                     ->where('payments.status', 'confirmed') // Explicitly qualified
+                     ->sum('payments.amount'); // Explicitly qualified
+    }
+
+    /**
+     * SCOPE METHODS with qualified columns
+     */
+    public function scopeWithConfirmedPayments($query)
+    {
+        return $query->whereHas('directPayments', function($q) {
+            $q->where('status', 'confirmed');
+        });
+    }
+
+    public function scopeWithPendingPayments($query)
+    {
+        return $query->whereHas('directPayments', function($q) {
+            $q->where('status', 'pending');
+        });
+    }
+
+    /**
+     * COMPREHENSIVE METRICS with proper column qualification
+     */
+    public function getComprehensiveMetrics()
+    {
         return [
-            'purchase_orders_created' => $this->purchaseOrders()
-                ->where('created_at', '>=', $startDate)
-                ->count(),
-            'payments_submitted' => $this->directPayments()
-                ->where('created_at', '>=', $startDate)
-                ->count(),
-            'payments_confirmed' => $this->directPayments()
-                ->where('confirmed_at', '>=', $startDate)
-                ->count(),
-            'total_spent' => $this->purchaseOrders()
-                ->where('created_at', '>=', $startDate)
-                ->sum('net_amount'),
-            'total_repaid' => $this->directPayments()
-                ->where('confirmed_at', '>=', $startDate)
-                ->sum('amount'),
+            'basic_info' => [
+                'id' => $this->id,
+                'name' => $this->name,
+                'business_type' => $this->business_type,
+                'created_at' => $this->created_at,
+                'is_active' => $this->is_active,
+            ],
+            'financial_metrics' => [
+                'total_assigned_credit' => $this->getTotalAssignedCredit(),
+                'available_spending_power' => $this->getAvailableSpendingPower(),
+                'outstanding_debt' => $this->getOutstandingDebt(),
+                'credit_utilization' => $this->getCreditUtilization(),
+                'spending_power_utilization' => $this->getSpendingPowerUtilization(),
+            ],
+            'performance_metrics' => [
+                'payment_score' => $this->getPaymentScore(),
+                'health_score' => $this->getHealthScore(),
+                'average_payment_time' => $this->getAveragePaymentTime(),
+                'effective_interest_rate' => $this->getEffectiveInterestRate(),
+            ],
+            'activity_metrics' => [
+                'total_purchase_orders' => $this->purchaseOrders()->count(),
+                'pending_purchase_orders' => $this->purchaseOrders()
+                    ->where('purchase_orders.status', 'pending') // Qualified
+                    ->count(),
+                'overdue_purchase_orders' => $this->purchaseOrders()->overdue()->count(),
+                'pending_payments' => $this->directPayments()
+                    ->where('status', 'pending')
+                    ->count(),
+                'days_since_activity' => $this->getDaysSinceLastActivity(),
+            ],
+            'risk_assessment' => $this->getRiskIndicators(),
         ];
     }
+
 
     /**
      * Calculate business health score
@@ -1077,39 +1144,6 @@ class Business extends Authenticatable
     /**
      * Get comprehensive business metrics for admin dashboard
      */
-    public function getComprehensiveMetrics()
-    {
-        return [
-            'basic_info' => [
-                'id' => $this->id,
-                'name' => $this->name,
-                'business_type' => $this->business_type,
-                'created_at' => $this->created_at,
-                'is_active' => $this->is_active,
-            ],
-            'financial_metrics' => [
-                'total_assigned_credit' => $this->getTotalAssignedCredit(),
-                'available_spending_power' => $this->getAvailableSpendingPower(),
-                'outstanding_debt' => $this->getOutstandingDebt(),
-                'credit_utilization' => $this->getCreditUtilization(),
-                'spending_power_utilization' => $this->getSpendingPowerUtilization(),
-            ],
-            'performance_metrics' => [
-                'payment_score' => $this->getPaymentScore(),
-                'health_score' => $this->getHealthScore(),
-                'average_payment_time' => $this->getAveragePaymentTime(),
-                'effective_interest_rate' => $this->getEffectiveInterestRate(),
-            ],
-            'activity_metrics' => [
-                'total_purchase_orders' => $this->purchaseOrders()->count(),
-                'pending_purchase_orders' => $this->purchaseOrders()->where('status', 'pending')->count(),
-                'overdue_purchase_orders' => $this->purchaseOrders()->overdue()->count(),
-                'pending_payments' => $this->directPayments()->where('status', 'pending')->count(),
-                'days_since_activity' => $this->getDaysSinceLastActivity(),
-            ],
-            'risk_assessment' => $this->getRiskIndicators(),
-        ];
-    }
 
     /**
      * Support ticket statistics
