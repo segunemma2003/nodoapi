@@ -43,22 +43,22 @@ class BusinessController extends Controller
         }
 
         // Get credit and spending metrics
-        $totalAssignedCredit = $business->getTotalAssignedCredit();
-        $availableSpendingPower = $business->getAvailableSpendingPower();
-        $outstandingDebt = $business->getOutstandingDebt();
-        $creditUtilization = $business->getCreditUtilization();
-        $spendingPowerUtilization = $business->getSpendingPowerUtilization();
-        $paymentScore = $business->getPaymentScore();
+        // $totalAssignedCredit = $business->getTotalAssignedCredit();
+        // $availableSpendingPower = $business->getAvailableSpendingPower();
+        // $outstandingDebt = $business->getOutstandingDebt();
+        // $creditUtilization = $business->getCreditUtilization();
+        // $spendingPowerUtilization = $business->getSpendingPowerUtilization();
+        // $paymentScore = $business->getPaymentScore();
 
         $data = [
             'business_info' => $business->load('riskTier'),
             'credit_summary' => [
-                'total_assigned_credit' => $totalAssignedCredit,      // current_balance
-                'available_spending_power' => $availableSpendingPower, // available_balance
-                'outstanding_debt' => $outstandingDebt,                // credit_balance
-                'used_credit' => $totalAssignedCredit - $availableSpendingPower,
-                'credit_utilization' => $creditUtilization,
-                'spending_power_utilization' => $spendingPowerUtilization,
+                // 'total_assigned_credit' => $totalAssignedCredit,      // current_balance
+                // 'available_spending_power' => $availableSpendingPower, // available_balance
+                // 'outstanding_debt' => $outstandingDebt,                // credit_balance
+                // 'used_credit' => $totalAssignedCredit - $availableSpendingPower,
+                // 'credit_utilization' => $creditUtilization,
+                // 'spending_power_utilization' => $spendingPowerUtilization,
             ],
             'balances' => [
                 'current_balance' => $business->current_balance,        // Total assigned credit
@@ -68,7 +68,7 @@ class BusinessController extends Controller
                 'total_collateral_balance' => $business->total_collateral_balance            // Same as available
             ],
             'performance_metrics' => [
-                'payment_score' => $paymentScore,
+                // 'payment_score' => $paymentScore,
                 'effective_interest_rate' => $business->getEffectiveInterestRate(),
                 'risk_tier' => $business->riskTier?->tier_name ?? 'Unassigned',
                 'business_age_months' => $business->created_at->diffInMonths(now()),
