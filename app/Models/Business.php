@@ -29,6 +29,8 @@ class Business extends Authenticatable
         'created_by',
         'risk_tier_id',
         'custom_interest_rate',
+        'custom_interest_frequency',
+        'last_interest_applied_at',
     ];
 
     protected $hidden = [
@@ -41,6 +43,7 @@ class Business extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'last_login_at' => 'datetime',
+            'last_interest_applied_at' => 'datetime',
             'password' => 'hashed',
             'is_active' => 'boolean',
             'available_balance' => 'decimal:2',
@@ -78,10 +81,30 @@ class Business extends Authenticatable
         return $this->hasMany(BalanceTransaction::class);
     }
 
+    public function supportTickets()
+    {
+        return $this->hasMany(SupportTicket::class);
+    }
 
+    // FIXED: Direct payments relationship - avoid hasManyThrough ambiguity
     public function directPayments()
     {
-        return $this->hasMany(Payment::class);
+        return $this->hasMany(Payment::class, 'business_id');
+    }
+
+    // FIXED: Payments through purchase orders - with explicit column qualification
+    public function payments()
+    {
+        return $this->hasManyThrough(Payment::class, PurchaseOrder::class, 'business_id', 'purchase_order_id')
+                    ->select('payments.*'); // Explicitly select from payments table
+    }
+
+    // FIXED: Confirmed payments with qualified column names
+    public function confirmedPayments()
+    {
+        return $this->hasManyThrough(Payment::class, PurchaseOrder::class, 'business_id', 'purchase_order_id')
+                    ->where('payments.status', 'confirmed')
+                    ->select('payments.*');
     }
 
     // Scopes
@@ -91,15 +114,12 @@ class Business extends Authenticatable
     }
 
     /**
-     * CORRECTED BALANCE MANAGEMENT OPERATIONS
+     * BALANCE MANAGEMENT OPERATIONS
      * =======================================
      */
 
     /**
      * 1. ADMIN ASSIGNS INITIAL CREDIT
-     * - Sets current_balance (total assigned credit)
-     * - Sets available_balance (initial spending power)
-     * - Sets credit_limit (same as available)
      */
     public function assignInitialCredit($amount, $adminId)
     {
@@ -141,11 +161,6 @@ class Business extends Authenticatable
 
     /**
      * 2. BUSINESS CREATES PURCHASE ORDER
-     * - Platform pays vendor directly (not business)
-     * - Reduces available_balance (less spending power)
-     * - Reduces credit_limit (same as available)
-     * - Increases credit_balance (debt created)
-     * - current_balance UNCHANGED (assigned credit remains same)
      */
     public function createPurchaseOrder($amount, $poId)
     {
@@ -162,8 +177,6 @@ class Business extends Authenticatable
 
             // Increase debt
             $this->credit_balance += $amount;
-
-            // current_balance UNCHANGED - it's the total assigned credit
 
             $this->save();
 
@@ -197,8 +210,6 @@ class Business extends Authenticatable
 
     /**
      * 3. BUSINESS SUBMITS PAYMENT
-     * - Just records the payment, no balance changes yet
-     * - Admin will decide whether to approve and restore credit
      */
     public function submitPayment($amount, $paymentId)
     {
@@ -217,10 +228,6 @@ class Business extends Authenticatable
 
     /**
      * 4. ADMIN APPROVES PAYMENT (RESTORES SPENDING POWER)
-     * - Increases available_balance (restored spending power)
-     * - Increases credit_limit (same as available)
-     * - Decreases credit_balance (debt reduced)
-     * - current_balance UNCHANGED (assigned credit remains same)
      */
     public function approvePayment($amount, $paymentId)
     {
@@ -270,15 +277,9 @@ class Business extends Authenticatable
             throw $e;
         }
     }
-public function payments()
-{
-    return $this->hasManyThrough(Payment::class, PurchaseOrder::class)
-                ->select('payments.*'); // Explicitly select from payments table
-}
+
     /**
      * 5. ADMIN REJECTS PAYMENT
-     * - No balance changes
-     * - Just log the rejection
      */
     public function rejectPayment($amount, $paymentId, $reason = null)
     {
@@ -297,9 +298,6 @@ public function payments()
 
     /**
      * 6. ADMIN APPLIES INTEREST (OPTIONAL)
-     * - Increases credit_balance (debt)
-     * - Reduces available_balance (less spending power)
-     * - current_balance UNCHANGED
      */
     public function applyInterest($interestAmount, $reason = 'Periodic interest charge')
     {
@@ -348,9 +346,6 @@ public function payments()
 
     /**
      * 7. ADMIN ADJUSTS ASSIGNED CREDIT
-     * - Changes current_balance (total assigned credit)
-     * - Adjusts available_balance proportionally
-     * - Maintains credit_limit = available_balance
      */
     public function adjustAssignedCredit($newAmount, $reason, $adminId)
     {
@@ -399,8 +394,6 @@ public function payments()
 
     /**
      * 8. ADMIN MANAGES TREASURY (PLATFORM FUNDS)
-     * - Only admin can update treasury_collateral_balance
-     * - This represents platform's actual money
      */
     public function updateTreasury($amount, $operation, $description, $adminId)
     {
@@ -487,7 +480,6 @@ public function payments()
             ->get();
     }
 
-
     /**
      * INTEREST RATE METHODS (OPTIONAL)
      * ================================
@@ -519,12 +511,6 @@ public function payments()
         $dailyRate = $annualRate / 365 / 100;
         return round($this->credit_balance * $dailyRate * $days, 2);
     }
-
-    /**
-     * LOG BALANCE TRANSACTIONS
-     * ========================
-     */
-
 
     /**
      * BALANCE VALIDATION
@@ -564,78 +550,85 @@ public function payments()
     }
 
     /**
-     * RECONCILIATION METHODS
-     * ======================
+     * PAYMENT PERFORMANCE METRICS (FIXED)
+     * ===========================
      */
-    public function reconcileBalances()
+
+    // FIXED: Use directPayments() to avoid join ambiguity
+    public function getPaymentScore()
     {
-        // Recalculate balances from PO and payment history
-        $totalSpent = $this->purchaseOrders()->sum('net_amount');
-        $totalPaid = $this->payments()->where('status', 'confirmed')->sum('amount');
+        $totalPayments = $this->directPayments()->where('status', 'confirmed')->count();
 
-        $expectedDebt = $totalSpent - $totalPaid;
-        $expectedAvailable = $this->current_balance - $expectedDebt;
+        if ($totalPayments === 0) return 0;
 
-        // Update balances
-        $this->credit_balance = max(0, $expectedDebt);
-        $this->available_balance = max(0, $expectedAvailable);
-        $this->credit_limit = $this->available_balance;
-        $this->save();
+        // Count on-time payments using explicit table names and separate query to avoid joins
+        $onTimePayments = 0;
 
-        return [
-            'current' => $this->current_balance,
-            'available' => $this->available_balance,
-            'credit' => $this->credit_balance,
-            'treasury_collateral' => $this->treasury_collateral_balance,
-        ];
+        // Get confirmed payments with their purchase orders
+        $confirmedPayments = $this->directPayments()
+            ->where('status', 'confirmed')
+            ->with('purchaseOrder')
+            ->get();
+
+        foreach ($confirmedPayments as $payment) {
+            if ($payment->purchaseOrder &&
+                $payment->confirmed_at &&
+                $payment->confirmed_at <= $payment->purchaseOrder->due_date) {
+                $onTimePayments++;
+            }
+        }
+
+        return round(($onTimePayments / $totalPayments) * 100, 2);
+    }
+
+    public function getAveragePaymentTime()
+    {
+        // Use directPayments and load purchase orders separately to avoid ambiguous joins
+        $payments = $this->directPayments()
+            ->where('status', 'confirmed')
+            ->with('purchaseOrder')
+            ->get();
+
+        if ($payments->isEmpty()) {
+            return 0;
+        }
+
+        $totalDays = 0;
+        $validPayments = 0;
+
+        foreach ($payments as $payment) {
+            if ($payment->purchaseOrder && $payment->confirmed_at) {
+                $totalDays += $payment->confirmed_at->diffInDays($payment->purchaseOrder->order_date);
+                $validPayments++;
+            }
+        }
+
+        return $validPayments > 0 ? round($totalDays / $validPayments, 2) : 0;
     }
 
     /**
-     * PAYMENT PERFORMANCE METRICS
-     * ===========================
+     * Get confirmed payments count - FIXED
      */
-    public function getPaymentScore()
-{
-    // Use directPayments() to avoid join ambiguity
-    $totalPayments = $this->directPayments()->where('payments.status', 'confirmed')->count();
-
-    if ($totalPayments === 0) return 0;
-
-    // Count on-time payments using explicit table names
-    $onTimePayments = $this->directPayments()
-        ->where('payments.status', 'confirmed')
-        ->whereHas('purchaseOrder', function($query) {
-            $query->whereRaw('payments.confirmed_at <= purchase_orders.due_date');
-        })
-        ->count();
-
-    return round(($onTimePayments / $totalPayments) * 100, 2);
-}
-public function confirmedPayments()
-{
-    return $this->hasManyThrough(Payment::class, PurchaseOrder::class)
-                ->where('payments.status', 'confirmed'); // Qualify the status column
-}
-    public function getAveragePaymentTime()
+    public function getConfirmedPaymentsCount()
     {
-        return $this->payments()
-            ->where('status', 'confirmed')
-            ->whereHas('purchaseOrder')
-            ->get()
-            ->avg(function($payment) {
-                return $payment->confirmed_at->diffInDays($payment->purchaseOrder->order_date);
-            });
+        return $this->directPayments()->where('status', 'confirmed')->count();
     }
 
-     public function getInterestRateConfig()
-    {
+    /**
+     * INTEREST RATE CONFIGURATION METHODS
+     * ====================================
+     */
 
+    public function getInterestRateConfig()
+    {
         // Custom rate configuration for this business
         if ($this->custom_interest_rate && $this->custom_interest_frequency) {
             return [
                 'rate' => $this->custom_interest_rate,
                 'frequency' => $this->custom_interest_frequency,
                 'source' => 'custom',
+                'auto_apply' => true, // Default for custom rates
+                'apply_day' => 1,
             ];
         }
 
@@ -645,6 +638,8 @@ public function confirmedPayments()
                 'rate' => $this->riskTier->interest_rate,
                 'frequency' => $this->riskTier->interest_frequency ?? 'annual',
                 'source' => 'risk_tier',
+                'auto_apply' => true,
+                'apply_day' => 1,
             ];
         }
 
@@ -692,7 +687,8 @@ public function confirmedPayments()
                 throw new \Exception("Unsupported interest frequency: {$frequency}");
         }
     }
- /**
+
+    /**
      * Calculate interest for exact frequency period
      */
     public function calculatePeriodInterest($principal, $periods = 1, $rateConfig = null)
@@ -812,348 +808,362 @@ public function confirmedPayments()
         }
     }
 
+    /**
+     * Log balance transaction - make it public so AdminController can use it
+     */
+    public function logBalanceTransaction($balanceType, $amount, $transactionType, $description, $referenceType = null, $referenceId = null)
+    {
+        $balanceField = $balanceType . '_balance';
+        $balanceBefore = $this->getOriginal($balanceField) ?? 0;
+        $balanceAfter = $this->$balanceField ?? 0;
 
-
-/**
- * Log balance transaction - make it public so AdminController can use it
- */
-public function logBalanceTransaction($balanceType, $amount, $transactionType, $description, $referenceType = null, $referenceId = null)
-{
-    $balanceField = $balanceType . '_balance';
-    $balanceBefore = $this->getOriginal($balanceField) ?? 0;
-    $balanceAfter = $this->$balanceField ?? 0;
-
-    BalanceTransaction::create([
-        'business_id' => $this->id,
-        'transaction_type' => $transactionType, // 'credit', 'debit', 'pending', 'rejected'
-        'balance_type' => $balanceType,
-        'amount' => $amount,
-        'balance_before' => $balanceBefore,
-        'balance_after' => $balanceAfter,
-        'reference_type' => $referenceType,
-        'reference_id' => $referenceId,
-        'description' => $description,
-    ]);
-}
-
-/**
- * Get payment history for this business
- */
-public function getPaymentHistory($limit = 20)
-{
-    return $this->payments()
-                ->with(['purchaseOrder.vendor', 'confirmedBy', 'rejectedBy'])
-                ->orderBy('created_at', 'desc')
-                ->limit($limit)
-                ->get();
-}
-
-/**
- * Get transaction history for this business
- */
-public function getTransactionHistory($limit = 50)
-{
-    return $this->balanceTransactions()
-                ->orderBy('created_at', 'desc')
-                ->limit($limit)
-                ->get();
-}
-
-/**
- * Get overdue purchase orders
- */
-public function getOverduePurchaseOrders()
-{
-    return $this->purchaseOrders()
-                ->overdue()
-                ->with(['vendor', 'payments'])
-                ->get();
-}
-
-/**
- * Get pending purchase orders requiring admin approval
- */
-public function getPendingPurchaseOrders()
-{
-    return $this->purchaseOrders()
-                ->where('status', 'pending')
-                ->with(['vendor', 'payments'])
-                ->get();
-}
-
-/**
- * Get business activity summary
- */
-public function getActivitySummary($days = 30)
-{
-    $startDate = now()->subDays($days);
-
-    return [
-        'purchase_orders_created' => $this->purchaseOrders()
-            ->where('created_at', '>=', $startDate)
-            ->count(),
-        'payments_submitted' => $this->payments()
-            ->where('created_at', '>=', $startDate)
-            ->count(),
-        'payments_confirmed' => $this->payments()
-            ->where('confirmed_at', '>=', $startDate)
-            ->count(),
-        'total_spent' => $this->purchaseOrders()
-            ->where('created_at', '>=', $startDate)
-            ->sum('net_amount'),
-        'total_repaid' => $this->payments()
-            ->where('confirmed_at', '>=', $startDate)
-            ->sum('amount'),
-    ];
-}
-
-/**
- * Calculate business health score
- */
-public function getHealthScore()
-{
-    $score = 100;
-
-    // Credit utilization impact (30% weight)
-    $utilization = $this->getCreditUtilization();
-    if ($utilization > 90) {
-        $score -= 30;
-    } elseif ($utilization > 80) {
-        $score -= 20;
-    } elseif ($utilization > 70) {
-        $score -= 10;
+        BalanceTransaction::create([
+            'business_id' => $this->id,
+            'transaction_type' => $transactionType, // 'credit', 'debit', 'pending', 'rejected'
+            'balance_type' => $balanceType,
+            'amount' => $amount,
+            'balance_before' => $balanceBefore,
+            'balance_after' => $balanceAfter,
+            'reference_type' => $referenceType,
+            'reference_id' => $referenceId,
+            'description' => $description,
+        ]);
     }
 
-    // Payment score impact (40% weight)
-    $paymentScore = $this->getPaymentScore();
-    $paymentImpact = (100 - $paymentScore) * 0.4;
-    $score -= $paymentImpact;
-
-    // Overdue orders impact (20% weight)
-    $overdueCount = $this->purchaseOrders()->overdue()->count();
-    $totalOrders = $this->purchaseOrders()->count();
-    if ($totalOrders > 0) {
-        $overdueRatio = $overdueCount / $totalOrders;
-        $score -= ($overdueRatio * 20);
+    /**
+     * Get payment history for this business - FIXED
+     */
+    public function getPaymentHistory($limit = 20)
+    {
+        return $this->directPayments()
+                    ->with(['purchaseOrder.vendor'])
+                    ->orderBy('created_at', 'desc')
+                    ->limit($limit)
+                    ->get();
     }
 
-    // Activity level impact (10% weight)
-    $daysSinceLastActivity = $this->getDaysSinceLastActivity();
-    if ($daysSinceLastActivity > 60) {
-        $score -= 10;
-    } elseif ($daysSinceLastActivity > 30) {
-        $score -= 5;
+    /**
+     * Get transaction history for this business
+     */
+    public function getTransactionHistory($limit = 50)
+    {
+        return $this->balanceTransactions()
+                    ->orderBy('created_at', 'desc')
+                    ->limit($limit)
+                    ->get();
     }
 
-    return max(0, round($score, 1));
-}
-
-/**
- * Get days since last activity
- */
-public function getDaysSinceLastActivity()
-{
-    $lastPO = $this->purchaseOrders()->latest()->first();
-    $lastPayment = $this->payments()->latest()->first();
-
-    $lastActivity = null;
-
-    if ($lastPO && $lastPayment) {
-        $lastActivity = max($lastPO->created_at, $lastPayment->created_at);
-    } elseif ($lastPO) {
-        $lastActivity = $lastPO->created_at;
-    } elseif ($lastPayment) {
-        $lastActivity = $lastPayment->created_at;
-    } else {
-        $lastActivity = $this->created_at;
+    /**
+     * Get overdue purchase orders
+     */
+    public function getOverduePurchaseOrders()
+    {
+        return $this->purchaseOrders()
+                    ->overdue()
+                    ->with(['vendor', 'payments'])
+                    ->get();
     }
 
-    return now()->diffInDays($lastActivity);
-}
-
-/**
- * Check if business needs attention
- */
-public function needsAttention()
-{
-    $issues = [];
-
-    // High utilization
-    if ($this->getCreditUtilization() > 85) {
-        $issues[] = 'high_utilization';
+    /**
+     * Get pending purchase orders requiring admin approval
+     */
+    public function getPendingPurchaseOrders()
+    {
+        return $this->purchaseOrders()
+                    ->where('status', 'pending')
+                    ->with(['vendor', 'payments'])
+                    ->get();
     }
 
-    // Overdue payments
-    if ($this->purchaseOrders()->overdue()->count() > 0) {
-        $issues[] = 'overdue_payments';
+    /**
+     * Get business activity summary
+     */
+    public function getActivitySummary($days = 30)
+    {
+        $startDate = now()->subDays($days);
+
+        return [
+            'purchase_orders_created' => $this->purchaseOrders()
+                ->where('created_at', '>=', $startDate)
+                ->count(),
+            'payments_submitted' => $this->directPayments()
+                ->where('created_at', '>=', $startDate)
+                ->count(),
+            'payments_confirmed' => $this->directPayments()
+                ->where('confirmed_at', '>=', $startDate)
+                ->count(),
+            'total_spent' => $this->purchaseOrders()
+                ->where('created_at', '>=', $startDate)
+                ->sum('net_amount'),
+            'total_repaid' => $this->directPayments()
+                ->where('confirmed_at', '>=', $startDate)
+                ->sum('amount'),
+        ];
     }
 
-    // Pending payments for too long
-    $oldPendingPayments = $this->payments()
-        ->where('status', 'pending')
-        ->where('created_at', '<', now()->subDays(3))
-        ->count();
+    /**
+     * Calculate business health score
+     */
+    public function getHealthScore()
+    {
+        $score = 100;
 
-    if ($oldPendingPayments > 0) {
-        $issues[] = 'stale_pending_payments';
-    }
-
-    // Low payment score
-    if ($this->getPaymentScore() < 70) {
-        $issues[] = 'low_payment_score';
-    }
-
-    // No recent activity
-    if ($this->getDaysSinceLastActivity() > 30) {
-        $issues[] = 'inactive';
-    }
-
-    return $issues;
-}
-
-/**
- * Get suggested actions for business
- */
-public function getSuggestedActions()
-{
-    $issues = $this->needsAttention();
-    $actions = [];
-
-    foreach ($issues as $issue) {
-        switch ($issue) {
-            case 'high_utilization':
-                $actions[] = [
-                    'type' => 'urgent',
-                    'action' => 'Review credit limit increase or encourage payments',
-                    'description' => 'Credit utilization is above 85%'
-                ];
-                break;
-            case 'overdue_payments':
-                $actions[] = [
-                    'type' => 'urgent',
-                    'action' => 'Follow up on overdue payments',
-                    'description' => 'Business has overdue purchase orders'
-                ];
-                break;
-            case 'stale_pending_payments':
-                $actions[] = [
-                    'type' => 'normal',
-                    'action' => 'Review pending payment submissions',
-                    'description' => 'Payments pending approval for over 3 days'
-                ];
-                break;
-            case 'low_payment_score':
-                $actions[] = [
-                    'type' => 'normal',
-                    'action' => 'Consider tier adjustment or additional monitoring',
-                    'description' => 'Payment score below 70%'
-                ];
-                break;
-            case 'inactive':
-                $actions[] = [
-                    'type' => 'info',
-                    'action' => 'Check in with business to ensure account is still needed',
-                    'description' => 'No activity for over 30 days'
-                ];
-                break;
+        // Credit utilization impact (30% weight)
+        $utilization = $this->getCreditUtilization();
+        if ($utilization > 90) {
+            $score -= 30;
+        } elseif ($utilization > 80) {
+            $score -= 20;
+        } elseif ($utilization > 70) {
+            $score -= 10;
         }
+
+        // Payment score impact (40% weight)
+        $paymentScore = $this->getPaymentScore();
+        $paymentImpact = (100 - $paymentScore) * 0.4;
+        $score -= $paymentImpact;
+
+        // Overdue orders impact (20% weight)
+        $overdueCount = $this->purchaseOrders()->overdue()->count();
+        $totalOrders = $this->purchaseOrders()->count();
+        if ($totalOrders > 0) {
+            $overdueRatio = $overdueCount / $totalOrders;
+            $score -= ($overdueRatio * 20);
+        }
+
+        // Activity level impact (10% weight)
+        $daysSinceLastActivity = $this->getDaysSinceLastActivity();
+        if ($daysSinceLastActivity > 60) {
+            $score -= 10;
+        } elseif ($daysSinceLastActivity > 30) {
+            $score -= 5;
+        }
+
+        return max(0, round($score, 1));
     }
 
-    return $actions;
-}
+    /**
+     * Get days since last activity
+     */
+    public function getDaysSinceLastActivity()
+    {
+        $lastPO = $this->purchaseOrders()->latest()->first();
+        $lastPayment = $this->directPayments()->latest()->first();
 
-/**
- * Get business risk indicators
- */
-public function getRiskIndicators()
-{
-    return [
-        'credit_utilization' => $this->getCreditUtilization(),
-        'payment_score' => $this->getPaymentScore(),
-        'overdue_orders_count' => $this->purchaseOrders()->overdue()->count(),
-        'days_since_activity' => $this->getDaysSinceLastActivity(),
-        'pending_payments_count' => $this->payments()->where('status', 'pending')->count(),
-        'health_score' => $this->getHealthScore(),
-        'needs_attention' => !empty($this->needsAttention()),
-        'attention_reasons' => $this->needsAttention(),
-        'suggested_actions' => $this->getSuggestedActions(),
-    ];
-}
+        $lastActivity = null;
 
-public function getConfirmedPaymentsCount()
-{
-    return $this->hasManyThrough(Payment::class, PurchaseOrder::class)
-                ->where('payments.status', 'confirmed') // Specify payments.status
-                ->count();
-}
+        if ($lastPO && $lastPayment) {
+            $lastActivity = max($lastPO->created_at, $lastPayment->created_at);
+        } elseif ($lastPO) {
+            $lastActivity = $lastPO->created_at;
+        } elseif ($lastPayment) {
+            $lastActivity = $lastPayment->created_at;
+        } else {
+            $lastActivity = $this->created_at;
+        }
 
+        return now()->diffInDays($lastActivity);
+    }
 
-/**
- * Get comprehensive business metrics for admin dashboard
- */
-public function getComprehensiveMetrics()
-{
-    return [
-        'basic_info' => [
-            'id' => $this->id,
-            'name' => $this->name,
-            'business_type' => $this->business_type,
-            'created_at' => $this->created_at,
-            'is_active' => $this->is_active,
-        ],
-        'financial_metrics' => [
-            'total_assigned_credit' => $this->getTotalAssignedCredit(),
-            'available_spending_power' => $this->getAvailableSpendingPower(),
-            'outstanding_debt' => $this->getOutstandingDebt(),
+    /**
+     * Check if business needs attention
+     */
+    public function needsAttention()
+    {
+        $issues = [];
+
+        // High utilization
+        if ($this->getCreditUtilization() > 85) {
+            $issues[] = 'high_utilization';
+        }
+
+        // Overdue payments
+        if ($this->purchaseOrders()->overdue()->count() > 0) {
+            $issues[] = 'overdue_payments';
+        }
+
+        // Pending payments for too long
+        $oldPendingPayments = $this->directPayments()
+            ->where('status', 'pending')
+            ->where('created_at', '<', now()->subDays(3))
+            ->count();
+
+        if ($oldPendingPayments > 0) {
+            $issues[] = 'stale_pending_payments';
+        }
+
+        // Low payment score
+        if ($this->getPaymentScore() < 70) {
+            $issues[] = 'low_payment_score';
+        }
+
+        // No recent activity
+        if ($this->getDaysSinceLastActivity() > 30) {
+            $issues[] = 'inactive';
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Get suggested actions for business
+     */
+    public function getSuggestedActions()
+    {
+        $issues = $this->needsAttention();
+        $actions = [];
+
+        foreach ($issues as $issue) {
+            switch ($issue) {
+                case 'high_utilization':
+                    $actions[] = [
+                        'type' => 'urgent',
+                        'action' => 'Review credit limit increase or encourage payments',
+                        'description' => 'Credit utilization is above 85%'
+                    ];
+                    break;
+                case 'overdue_payments':
+                    $actions[] = [
+                        'type' => 'urgent',
+                        'action' => 'Follow up on overdue payments',
+                        'description' => 'Business has overdue purchase orders'
+                    ];
+                    break;
+                case 'stale_pending_payments':
+                    $actions[] = [
+                        'type' => 'normal',
+                        'action' => 'Review pending payment submissions',
+                        'description' => 'Payments pending approval for over 3 days'
+                    ];
+                    break;
+                case 'low_payment_score':
+                    $actions[] = [
+                        'type' => 'normal',
+                        'action' => 'Consider tier adjustment or additional monitoring',
+                        'description' => 'Payment score below 70%'
+                    ];
+                    break;
+                case 'inactive':
+                    $actions[] = [
+                        'type' => 'info',
+                        'action' => 'Check in with business to ensure account is still needed',
+                        'description' => 'No activity for over 30 days'
+                    ];
+                    break;
+            }
+        }
+
+        return $actions;
+    }
+
+    /**
+     * Get business risk indicators
+     */
+    public function getRiskIndicators()
+    {
+        return [
             'credit_utilization' => $this->getCreditUtilization(),
-            'spending_power_utilization' => $this->getSpendingPowerUtilization(),
-        ],
-        'performance_metrics' => [
             'payment_score' => $this->getPaymentScore(),
-            'health_score' => $this->getHealthScore(),
-            'average_payment_time' => $this->getAveragePaymentTime(),
-            'effective_interest_rate' => $this->getEffectiveInterestRate(),
-        ],
-        'activity_metrics' => [
-            'total_purchase_orders' => $this->purchaseOrders()->count(),
-            'pending_purchase_orders' => $this->purchaseOrders()->where('status', 'pending')->count(),
-            'overdue_purchase_orders' => $this->purchaseOrders()->overdue()->count(),
-            'pending_payments' => $this->payments()->where('status', 'pending')->count(),
+            'overdue_orders_count' => $this->purchaseOrders()->overdue()->count(),
             'days_since_activity' => $this->getDaysSinceLastActivity(),
-        ],
-        'risk_assessment' => $this->getRiskIndicators(),
-    ];
-}
-
-public function supportTickets()
-{
-    return $this->hasMany(SupportTicket::class);
-}
-
-public function getSupportStats()
-{
-    return [
-        'total_tickets' => $this->supportTickets()->count(),
-        'open_tickets' => $this->supportTickets()->where('status', 'open')->count(),
-        'resolved_tickets' => $this->supportTickets()->where('status', 'resolved')->count(),
-        'avg_resolution_time' => $this->getAverageTicketResolutionTime(),
-        'last_ticket_date' => $this->supportTickets()->latest()->first()?->created_at,
-    ];
-}
-
-private function getAverageTicketResolutionTime()
-{
-    $resolvedTickets = $this->supportTickets()->whereNotNull('resolved_at')->get();
-
-    if ($resolvedTickets->isEmpty()) {
-        return null;
+            'pending_payments_count' => $this->directPayments()->where('status', 'pending')->count(),
+            'health_score' => $this->getHealthScore(),
+            'needs_attention' => !empty($this->needsAttention()),
+            'attention_reasons' => $this->needsAttention(),
+            'suggested_actions' => $this->getSuggestedActions(),
+        ];
     }
 
-    $totalHours = $resolvedTickets->sum(function($ticket) {
-        return $ticket->created_at->diffInHours($ticket->resolved_at);
-    });
+    /**
+     * Get comprehensive business metrics for admin dashboard
+     */
+    public function getComprehensiveMetrics()
+    {
+        return [
+            'basic_info' => [
+                'id' => $this->id,
+                'name' => $this->name,
+                'business_type' => $this->business_type,
+                'created_at' => $this->created_at,
+                'is_active' => $this->is_active,
+            ],
+            'financial_metrics' => [
+                'total_assigned_credit' => $this->getTotalAssignedCredit(),
+                'available_spending_power' => $this->getAvailableSpendingPower(),
+                'outstanding_debt' => $this->getOutstandingDebt(),
+                'credit_utilization' => $this->getCreditUtilization(),
+                'spending_power_utilization' => $this->getSpendingPowerUtilization(),
+            ],
+            'performance_metrics' => [
+                'payment_score' => $this->getPaymentScore(),
+                'health_score' => $this->getHealthScore(),
+                'average_payment_time' => $this->getAveragePaymentTime(),
+                'effective_interest_rate' => $this->getEffectiveInterestRate(),
+            ],
+            'activity_metrics' => [
+                'total_purchase_orders' => $this->purchaseOrders()->count(),
+                'pending_purchase_orders' => $this->purchaseOrders()->where('status', 'pending')->count(),
+                'overdue_purchase_orders' => $this->purchaseOrders()->overdue()->count(),
+                'pending_payments' => $this->directPayments()->where('status', 'pending')->count(),
+                'days_since_activity' => $this->getDaysSinceLastActivity(),
+            ],
+            'risk_assessment' => $this->getRiskIndicators(),
+        ];
+    }
 
-    return round($totalHours / $resolvedTickets->count(), 2);
-}
+    /**
+     * Support ticket statistics
+     */
+    public function getSupportStats()
+    {
+        return [
+            'total_tickets' => $this->supportTickets()->count(),
+            'open_tickets' => $this->supportTickets()->where('status', 'open')->count(),
+            'resolved_tickets' => $this->supportTickets()->where('status', 'resolved')->count(),
+            'avg_resolution_time' => $this->getAverageTicketResolutionTime(),
+            'last_ticket_date' => $this->supportTickets()->latest()->first()?->created_at,
+        ];
+    }
 
+    private function getAverageTicketResolutionTime()
+    {
+        $resolvedTickets = $this->supportTickets()->whereNotNull('resolved_at')->get();
+
+        if ($resolvedTickets->isEmpty()) {
+            return null;
+        }
+
+        $totalHours = $resolvedTickets->sum(function($ticket) {
+            return $ticket->created_at->diffInHours($ticket->resolved_at);
+        });
+
+        return round($totalHours / $resolvedTickets->count(), 2);
+    }
+
+    /**
+     * RECONCILIATION METHODS
+     * ======================
+     */
+    public function reconcileBalances()
+    {
+        // Recalculate balances from PO and payment history
+        $totalSpent = $this->purchaseOrders()->sum('net_amount');
+        $totalPaid = $this->directPayments()->where('status', 'confirmed')->sum('amount');
+
+        $expectedDebt = $totalSpent - $totalPaid;
+        $expectedAvailable = $this->current_balance - $expectedDebt;
+
+        // Update balances
+        $this->credit_balance = max(0, $expectedDebt);
+        $this->available_balance = max(0, $expectedAvailable);
+        $this->credit_limit = $this->available_balance;
+        $this->save();
+
+        return [
+            'current' => $this->current_balance,
+            'available' => $this->available_balance,
+            'credit' => $this->credit_balance,
+            'treasury_collateral' => $this->treasury_collateral_balance,
+        ];
+    }
 }
