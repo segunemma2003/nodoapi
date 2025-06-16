@@ -9,7 +9,7 @@ Route::get('/test-resend', function () {
     try {
         \Illuminate\Support\Facades\Mail::raw('Test email from Laravel using Resend!', function ($message) {
             $message->to('segunemma2003@gmail.com') // Replace with your email
-                    ->subject('Test Email from Laravel + Resend');
+                    ->subject('Test Email from Laravel + Resend'.config('app.frontend_url') . '/login');
         });
 
         return response()->json([
