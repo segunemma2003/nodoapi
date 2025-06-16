@@ -64,7 +64,8 @@ class BusinessController extends Controller
                 'current_balance' => $business->current_balance,        // Total assigned credit
                 'available_balance' => $business->available_balance,    // Spending power left
                 'credit_balance' => $business->credit_balance,          // Outstanding debt
-                'credit_limit' => $business->credit_limit,              // Same as available
+                'credit_limit' => $business->credit_limit,
+                'total_collateral_balance' => $business->total_collateral_balance            // Same as available
             ],
             'performance_metrics' => [
                 'payment_score' => $paymentScore,
