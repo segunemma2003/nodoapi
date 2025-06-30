@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\UploadReceiptToS3;
 use App\Models\Business;
 use App\Models\Payment;
 use App\Models\Vendor;
@@ -298,52 +299,14 @@ class BusinessController extends Controller
 
     $request->validate([
         'amount' => 'required|numeric|min:1|max:' . $maxPayment,
-        'receipt' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // 5MB
+        'receipt' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
         'notes' => 'nullable|string|max:500'
     ]);
 
-    // Step 1: Upload file to S3
-    $receiptPath = null;
-    $receiptUrl = null;
+    $receipt = $request->file('receipt');
+    $localPath = $receipt->store('temp_receipts'); // stored in /storage/app/temp_receipts
+    $filename = basename($localPath);
 
-    if ($request->hasFile('receipt') && $request->file('receipt')->isValid()) {
-        try {
-            $file = $request->file('receipt');
-
-            Log::info('Uploading receipt file', [
-                'originalName' => $file->getClientOriginalName(),
-                'mimeType' => $file->getMimeType(),
-                'size' => $file->getSize(),
-            ]);
-
-            // Save the file to S3 with a unique name inside the 'receipts' directory
-            $receiptPath = Storage::disk('s3')->put('receipts', $file);
-
-            Log::info('Upload success', [
-                'path' => $receiptPath,
-            ]);
-
-            $receiptUrl = Storage::disk('s3')->url($receiptPath);
-        } catch (\Exception $e) {
-            Log::error('Upload failed', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to upload receipt file',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    } else {
-        return response()->json([
-            'success' => false,
-            'message' => 'Invalid or no receipt file provided'
-        ], 400);
-    }
-
-    // Step 2: Save payment and log transaction
     DB::beginTransaction();
     try {
         $payment = Payment::create([
@@ -353,21 +316,23 @@ class BusinessController extends Controller
             'amount' => $request->amount,
             'payment_type' => 'business_payment',
             'status' => 'pending',
-            'receipt_path' => $receiptUrl,
+            'receipt_path' => null, // to be updated by job
             'notes' => $request->notes,
             'payment_date' => now()
         ]);
 
         $business->submitPayment($request->amount, $payment->id);
 
+        // Dispatch background job
+        UploadReceiptToS3::dispatch($localPath, $filename, $payment->id);
+
         DB::commit();
 
         return response()->json([
             'success' => true,
-            'message' => 'Payment submitted successfully. Admin approval will restore your spending power.',
+            'message' => 'Payment submitted successfully. Receipt will be uploaded shortly.',
             'data' => [
                 'payment' => $payment,
-                'receipt_url' => $receiptUrl,
                 'current_debt' => $business->getOutstandingDebt(),
                 'potential_restored_credit' => $request->amount,
             ]
@@ -375,12 +340,7 @@ class BusinessController extends Controller
 
     } catch (\Exception $e) {
         DB::rollBack();
-
-        Log::error('Payment submission failed', [
-            'message' => $e->getMessage(),
-            'trace' => $e->getTraceAsString(),
-        ]);
-
+        Log::error('Payment submission failed', ['error' => $e->getMessage()]);
         return response()->json([
             'success' => false,
             'message' => 'Failed to submit payment',
