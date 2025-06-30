@@ -482,12 +482,12 @@ public function uploadLogo(Request $request)
     DB::beginTransaction();
     try {
         // Delete old logo if exists
-        if ($business->logo_path && Storage::disk('public')->exists($business->logo_path)) {
-            Storage::disk('public')->delete($business->logo_path);
+        if ($business->logo_path && Storage::disk('s3')->exists($business->logo_path)) {
+            Storage::disk('s3')->delete($business->logo_path);
         }
 
         // Store new logo
-        $logoPath = $request->file('logo')->store('business_logos', 'public');
+        $logoPath = $request->file('logo')->store('business_logos', 's3');
 
         $business->update(['logo_path' => $logoPath]);
 
@@ -505,7 +505,7 @@ public function uploadLogo(Request $request)
             'message' => 'Business logo uploaded successfully',
             'data' => [
                 'logo_path' => $logoPath,
-                'logo_url' => asset('storage/' . $logoPath),
+                'logo_url' => Storage::disk('s3')->url($logoPath),
                 'file_size' => $request->file('logo')->getSize(),
                 'file_type' => $request->file('logo')->getMimeType(),
             ]

@@ -303,7 +303,13 @@ class BusinessController extends Controller
         ]);
 
         // Store receipt file
-        $receiptPath = $request->file('receipt')->store('receipts/' . $po->business_id, 'private');
+        $filename = 'receipts/' . $po->business_id . '/' . time() . '_' . $request->file('receipt')->getClientOriginalName();
+
+        // Store receipt file to S3
+        $receiptPath = Storage::disk('s3')->putFileAs('receipts/' . $po->business_id, $request->file('receipt'), basename($filename));
+
+        // Get the full S3 URL
+        $receiptUrl = Storage::disk('s3')->url($receiptPath);
 
         DB::beginTransaction();
         try {
@@ -314,7 +320,7 @@ class BusinessController extends Controller
                 'amount' => $request->amount,
                 'payment_type' => 'business_payment',
                 'status' => 'pending',
-                'receipt_path' => $receiptPath,
+                'receipt_path' => $receiptUrl,
                 'notes' => $request->notes,
                 'payment_date' => now()
             ]);
@@ -329,6 +335,7 @@ class BusinessController extends Controller
                 'message' => 'Payment submitted successfully. Admin approval will restore your spending power.',
                 'data' => [
                     'payment' => $payment,
+                     'receipt_url' => $receiptUrl,
                     'current_debt' => $business->getOutstandingDebt(),
                     'potential_restored_credit' => $request->amount,
                 ]
@@ -1233,20 +1240,25 @@ public function uploadLogo(Request $request)
     DB::beginTransaction();
     try {
         // Delete old logo if exists
-        if ($business->logo_path && Storage::disk('public')->exists($business->logo_path)) {
-            Storage::disk('public')->delete($business->logo_path);
+        if ($business->logo_path && Storage::disk('s3')->exists($business->logo_path)) {
+            Storage::disk('s3')->delete($business->logo_path);
         }
 
-        // Store new logo
-        $logoPath = $request->file('logo')->store('business_logos', 'public');
+         $filename = 'business_logos/' . $business->id . '/' . time() . '_' . $request->file('logo')->getClientOriginalName();
+
+        // Store new logo to S3
+       $logoPath = Storage::disk('s3')->putFileAs('business_logos/' . $business->id, $request->file('logo'), basename($filename));
+
+         $logoUrl = Storage::disk('s3')->url($logoPath);
 
         $business->update(['logo_path' => $logoPath]);
+
 
         // Log the logo upload
         Log::info('Business logo uploaded', [
             'business_id' => $business->id,
             'business_name' => $business->name,
-            'logo_path' => $logoPath,
+            'logo_path' => $logoUrl,
         ]);
 
         DB::commit();
@@ -1256,7 +1268,7 @@ public function uploadLogo(Request $request)
             'message' => 'Business logo uploaded successfully',
             'data' => [
                 'logo_path' => $logoPath,
-                'logo_url' => asset('storage/' . $logoPath),
+                'logo_url' => $logoUrl,
                 'file_size' => $request->file('logo')->getSize(),
                 'file_type' => $request->file('logo')->getMimeType(),
             ]
@@ -1324,10 +1336,10 @@ public function downloadReceipt(Payment $payment)
         abort(403, 'Unauthorized access to receipt');
     }
 
-    if (!$payment->receipt_path || !Storage::disk('private')->exists($payment->receipt_path)) {
+    if (!$payment->receipt_path || !Storage::disk('s3')->exists($payment->receipt_path)) {
         abort(404, 'Receipt file not found');
     }
 
-    return Storage::disk('private')->download($payment->receipt_path, 'receipt_' . $payment->payment_reference . '.pdf');
+    return Storage::disk('s3')->download($payment->receipt_path, 'receipt_' . $payment->payment_reference . '.pdf');
 }
 }
