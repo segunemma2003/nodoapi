@@ -306,7 +306,7 @@ class BusinessController extends Controller
         $filename = 'receipts/' . $po->business_id . '/' . time() . '_' . $request->file('receipt')->getClientOriginalName();
 
         // Store receipt file to S3
-        $receiptPath = Storage::disk('s3')->putFileAs('receipts/' . $po->business_id, $request->file('receipt'), basename($filename));
+        $receiptPath = Storage::disk('s3')->putFileAs('receipts/' . $po->business_id, $request->receipt, basename($filename));
 
         // Get the full S3 URL
         $receiptUrl = Storage::disk('s3')->url($receiptPath);

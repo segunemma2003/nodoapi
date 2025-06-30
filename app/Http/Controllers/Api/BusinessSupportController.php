@@ -105,7 +105,7 @@ class BusinessSupportController extends Controller
             $attachmentPaths = [];
             if ($request->hasFile('attachments')) {
                 foreach ($request->file('attachments') as $file) {
-                    $path = $file->store('support_attachments', 'private');
+                    $path = $file->store('support_attachments', 's3');
                     $attachmentPaths[] = [
                         'path' => $path,
                         'original_name' => $file->getClientOriginalName(),
@@ -169,7 +169,7 @@ class BusinessSupportController extends Controller
             $attachmentPaths = [];
             if ($request->hasFile('attachments')) {
                 foreach ($request->file('attachments') as $file) {
-                    $path = $file->store('support_attachments/' . $ticket->id, 'private');
+                    $path = $file->store('support_attachments/' . $ticket->id, 's3');
                     $attachmentPaths[] = [
                         'path' => $path,
                         'original_name' => $file->getClientOriginalName(),
