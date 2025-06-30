@@ -277,89 +277,117 @@ class BusinessController extends Controller
      * )
      */
     public function submitPayment(Request $request, PurchaseOrder $po)
-    {
-        $business = Auth::user();
-        if(!$business || !($business instanceof Business)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized - Business access required'
-            ], 403);
-        }
+{
+    $business = Auth::user();
+    if (!$business || !($business instanceof Business)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
+    }
 
-        // Verify PO belongs to business
-        if ($po->business_id !== $business->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found or access denied'
-            ], 404);
-        }
+    // Verify PO belongs to business
+    if ($po->business_id !== $business->id) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Purchase order not found or access denied'
+        ], 404);
+    }
 
-        $maxPayment = min($po->outstanding_amount, $business->getMaxPaymentAmount());
+    $maxPayment = min($po->outstanding_amount, $business->getMaxPaymentAmount());
 
-        $request->validate([
-            'amount' => 'required|numeric|min:1|max:' . $maxPayment,
-            'receipt' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // 5MB max
-            'notes' => 'nullable|string|max:500'
-        ]);
-
-        // Store receipt file
-
-
-try {
-    $receiptPath = Storage::disk('s3')->put('receipts', $request->file('receipt'));
-
-    Log::info('Upload success', [
-        'path' => $receiptPath,
+    $request->validate([
+        'amount' => 'required|numeric|min:1|max:' . $maxPayment,
+        'receipt' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // 5MB
+        'notes' => 'nullable|string|max:500'
     ]);
-} catch (\Exception $e) {
-    Log::error('Upload failed', [
-        'message' => $e->getMessage(),
-        'trace' => $e->getTraceAsString(),
-    ]);
-}
-        // Get the full S3 URL
-        $receiptUrl = Storage::disk('s3')->url($receiptPath);
 
-        DB::beginTransaction();
+    // Step 1: Upload file to S3
+    $receiptPath = null;
+    $receiptUrl = null;
+
+    if ($request->hasFile('receipt') && $request->file('receipt')->isValid()) {
         try {
-            $payment = Payment::create([
-                'payment_reference' => $this->generatePaymentReference(),
-                'purchase_order_id' => $po->id,
-                'business_id' => $po->business_id,
-                'amount' => $request->amount,
-                'payment_type' => 'business_payment',
-                'status' => 'pending',
-                'receipt_path' =>$receiptUrl,
-                'notes' => $request->notes,
-                'payment_date' => now()
+            $file = $request->file('receipt');
+
+            Log::info('Uploading receipt file', [
+                'originalName' => $file->getClientOriginalName(),
+                'mimeType' => $file->getMimeType(),
+                'size' => $file->getSize(),
             ]);
 
-            // Just log the submission - no balance changes until admin approves
-            $business->submitPayment($request->amount, $payment->id);
+            // Save the file to S3 with a unique name inside the 'receipts' directory
+            $receiptPath = Storage::disk('s3')->put('receipts', $file);
 
-            DB::commit();
+            Log::info('Upload success', [
+                'path' => $receiptPath,
+            ]);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Payment submitted successfully. Admin approval will restore your spending power.',
-                'data' => [
-                    'payment' => $payment,
-                     'receipt_url' => $receiptUrl,
-                    'current_debt' => $business->getOutstandingDebt(),
-                    'potential_restored_credit' => $request->amount,
-                ]
-            ], 201);
-
+            $receiptUrl = Storage::disk('s3')->url($receiptPath);
         } catch (\Exception $e) {
-            DB::rollback();
+            Log::error('Upload failed', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to submit payment',
+                'message' => 'Failed to upload receipt file',
                 'error' => $e->getMessage()
             ], 500);
         }
+    } else {
+        return response()->json([
+            'success' => false,
+            'message' => 'Invalid or no receipt file provided'
+        ], 400);
     }
 
+    // Step 2: Save payment and log transaction
+    DB::beginTransaction();
+    try {
+        $payment = Payment::create([
+            'payment_reference' => $this->generatePaymentReference(),
+            'purchase_order_id' => $po->id,
+            'business_id' => $po->business_id,
+            'amount' => $request->amount,
+            'payment_type' => 'business_payment',
+            'status' => 'pending',
+            'receipt_path' => $receiptUrl,
+            'notes' => $request->notes,
+            'payment_date' => now()
+        ]);
+
+        $business->submitPayment($request->amount, $payment->id);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Payment submitted successfully. Admin approval will restore your spending power.',
+            'data' => [
+                'payment' => $payment,
+                'receipt_url' => $receiptUrl,
+                'current_debt' => $business->getOutstandingDebt(),
+                'potential_restored_credit' => $request->amount,
+            ]
+        ], 201);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+
+        Log::error('Payment submission failed', [
+            'message' => $e->getMessage(),
+            'trace' => $e->getTraceAsString(),
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to submit payment',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
     /**
      * @OA\Get(
      *     path="/api/business/purchase-orders/{po}/payments",
