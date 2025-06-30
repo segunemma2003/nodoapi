@@ -302,43 +302,65 @@ class BusinessController extends Controller
         'notes' => 'nullable|string|max:500'
     ]);
 
-    // Store receipt file with proper error handling
+    // Store receipt file with Heroku-specific handling
     try {
-        // Check if S3 disk is properly configured
-        if (!Storage::disk('s3')->exists('')) {
-            throw new \Exception('S3 storage is not accessible');
-        }
-
         $file = $request->file('receipt');
-        $fileName = time() . '_' . $file->getClientOriginalName();
 
-        // Upload to S3 with explicit filename
-        $receiptPath = Storage::disk('s3')->putFileAs('receipts', $file, $fileName);
+        // Heroku-friendly filename with proper sanitization
+        $fileName = time() . '_' . str_replace(' ', '_', $file->getClientOriginalName());
+        $fileName = preg_replace('/[^A-Za-z0-9_\-\.]/', '', $fileName);
+
+        Log::info('Starting S3 upload on Heroku', [
+            'original_name' => $file->getClientOriginalName(),
+            'sanitized_name' => $fileName,
+            'file_size' => $file->getSize(),
+            'temp_path' => $file->getPathname(),
+            'aws_region' => env('AWS_DEFAULT_REGION'),
+            'aws_bucket' => env('AWS_BUCKET')
+        ]);
+
+        // Upload to S3 with explicit path and filename
+        $receiptPath = Storage::disk('s3')->putFileAs(
+            'receipts',
+            $file,
+            $fileName,
+            'public' // Make sure file is publicly accessible
+        );
 
         if (!$receiptPath) {
-            throw new \Exception('Failed to upload file to S3');
+            throw new \Exception('S3 putFileAs returned false - upload failed');
+        }
+
+        // Verify the file was actually uploaded
+        if (!Storage::disk('s3')->exists($receiptPath)) {
+            throw new \Exception('File upload completed but file not found on S3');
         }
 
         // Get the full S3 URL only after successful upload
         $receiptUrl = Storage::disk('s3')->url($receiptPath);
 
-        Log::info('S3 Upload success', [
+        Log::info('S3 Upload success on Heroku', [
             'path' => $receiptPath,
             'url' => $receiptUrl,
             'file_size' => $file->getSize(),
-            'original_name' => $file->getClientOriginalName()
+            'bucket' => env('AWS_BUCKET')
         ]);
 
     } catch (\Exception $e) {
-        Log::error('S3 Upload failed', [
+        Log::error('S3 Upload failed on Heroku', [
             'message' => $e->getMessage(),
             'trace' => $e->getTraceAsString(),
-            'file_name' => $request->file('receipt')->getClientOriginalName() ?? 'unknown',
-            's3_config' => [
-                'region' => config('filesystems.disks.s3.region'),
-                'bucket' => config('filesystems.disks.s3.bucket'),
-                'key_exists' => !empty(config('filesystems.disks.s3.key')),
-                'secret_exists' => !empty(config('filesystems.disks.s3.secret'))
+            'file_info' => [
+                'name' => $request->hasFile('receipt') ? $request->file('receipt')->getClientOriginalName() : 'no file',
+                'size' => $request->hasFile('receipt') ? $request->file('receipt')->getSize() : 0,
+                'temp_path' => $request->hasFile('receipt') ? $request->file('receipt')->getPathname() : 'none'
+            ],
+            'heroku_env' => [
+                'aws_key_exists' => !empty(env('AWS_ACCESS_KEY_ID')),
+                'aws_secret_exists' => !empty(env('AWS_SECRET_ACCESS_KEY')),
+                'aws_region' => env('AWS_DEFAULT_REGION'),
+                'aws_bucket' => env('AWS_BUCKET'),
+                'app_env' => env('APP_ENV')
             ]
         ]);
 
