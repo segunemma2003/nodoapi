@@ -77,9 +77,9 @@ class BusinessController extends Controller
                 'total_vendors' => $business->vendors()->count(),
                 'active_vendors' => $business->vendors()->active()->count(),
                 'total_purchase_orders' => $business->purchaseOrders()->count(),
-                'draft_purchase_orders' => $business->purchaseOrders()->where('purchaseOrders.status', 'draft')->count(),
-                'pending_purchase_orders' => $business->purchaseOrders()->where('purchaseOrders.status', 'pending')->count(),
-                'approved_purchase_orders' => $business->purchaseOrders()->where('purchaseOrders.status', 'approved')->count(),
+                'draft_purchase_orders' => $business->purchaseOrders()->where('status', 'draft')->count(),
+                'pending_purchase_orders' => $business->purchaseOrders()->where('status', 'pending')->count(),
+                'approved_purchase_orders' => $business->purchaseOrders()->where('status', 'approved')->count(),
                 'total_spent' => $business->purchaseOrders()->sum('net_amount'),
                 'total_payments_made' => $business->payments()->where('payments.status', 'confirmed')->sum('amount'),
                 'pending_payments' => $business->payments()->where('payments.status', 'pending')->count(),
@@ -675,7 +675,7 @@ class BusinessController extends Controller
 
         // Filter by status if provided
         if ($request->filled('status')) {
-            $query->where('purchaseOrders.status', $request->status);
+            $query->where('status', $request->status);
         }
 
         // Filter by payment status if provided
