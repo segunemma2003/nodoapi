@@ -303,10 +303,10 @@ class BusinessController extends Controller
         ]);
 
         // Store receipt file
-        $filename = 'receipts/' . $po->business_id . '/' . time() . '_' . $request->file('receipt')->getClientOriginalName();
+
 
         // Store receipt file to S3
-        $receiptPath = Storage::disk('s3')->putFileAs('receipts/' . $po->business_id, $request->receipt, basename($filename));
+        $receiptPath = Storage::disk('s3')->put('receipts' , $request->receipt);
 
         // Get the full S3 URL
         $receiptUrl = Storage::disk('s3')->url($receiptPath);
@@ -320,7 +320,7 @@ class BusinessController extends Controller
                 'amount' => $request->amount,
                 'payment_type' => 'business_payment',
                 'status' => 'pending',
-                'receipt_path' => $receiptUrl,
+                'receipt_path' =>$receiptUrl,
                 'notes' => $request->notes,
                 'payment_date' => now()
             ]);
