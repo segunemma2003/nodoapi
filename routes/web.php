@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Storage;
 
 Route::get('/', function () {
     return view('welcome');
@@ -22,5 +23,17 @@ Route::get('/test-resend', function () {
             'success' => false,
             'message' => 'Failed to send email: ' . $e->getMessage()
         ], 500);
+    }
+});
+
+
+Route::get('/test-s3', function() {
+    try {
+        Storage::disk('s3')->put('test.txt', 'Hello World');
+        $url = Storage::disk('s3')->url('test.txt');
+        Storage::disk('s3')->delete('test.txt');
+        return "S3 working! Test URL: " . $url;
+    } catch (\Exception $e) {
+        return "S3 Error: " . $e->getMessage();
     }
 });

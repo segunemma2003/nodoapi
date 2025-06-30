@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\UploadReceiptToS3;
 use App\Models\Business;
 use App\Models\Payment;
 use App\Models\Vendor;
@@ -277,10 +276,10 @@ class BusinessController extends Controller
      *     @OA\Response(response=201, description="Payment submitted - awaiting admin approval to restore credit")
      * )
      */
-    public function submitPayment(Request $request, PurchaseOrder $po)
+   public function submitPayment(Request $request, PurchaseOrder $po)
 {
     $business = Auth::user();
-    if (!$business || !($business instanceof Business)) {
+    if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
             'message' => 'Unauthorized - Business access required'
@@ -299,14 +298,58 @@ class BusinessController extends Controller
 
     $request->validate([
         'amount' => 'required|numeric|min:1|max:' . $maxPayment,
-        'receipt' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
+        'receipt' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // 5MB max
         'notes' => 'nullable|string|max:500'
     ]);
 
-    $receipt = $request->file('receipt');
-    $localPath = $receipt->store('temp_receipts'); // stored in /storage/app/temp_receipts
-    $filename = basename($localPath);
+    // Store receipt file with proper error handling
+    try {
+        // Check if S3 disk is properly configured
+        if (!Storage::disk('s3')->exists('')) {
+            throw new \Exception('S3 storage is not accessible');
+        }
 
+        $file = $request->file('receipt');
+        $fileName = time() . '_' . $file->getClientOriginalName();
+
+        // Upload to S3 with explicit filename
+        $receiptPath = Storage::disk('s3')->putFileAs('receipts', $file, $fileName);
+
+        if (!$receiptPath) {
+            throw new \Exception('Failed to upload file to S3');
+        }
+
+        // Get the full S3 URL only after successful upload
+        $receiptUrl = Storage::disk('s3')->url($receiptPath);
+
+        Log::info('S3 Upload success', [
+            'path' => $receiptPath,
+            'url' => $receiptUrl,
+            'file_size' => $file->getSize(),
+            'original_name' => $file->getClientOriginalName()
+        ]);
+
+    } catch (\Exception $e) {
+        Log::error('S3 Upload failed', [
+            'message' => $e->getMessage(),
+            'trace' => $e->getTraceAsString(),
+            'file_name' => $request->file('receipt')->getClientOriginalName() ?? 'unknown',
+            's3_config' => [
+                'region' => config('filesystems.disks.s3.region'),
+                'bucket' => config('filesystems.disks.s3.bucket'),
+                'key_exists' => !empty(config('filesystems.disks.s3.key')),
+                'secret_exists' => !empty(config('filesystems.disks.s3.secret'))
+            ]
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to upload receipt. Please try again.',
+            'error' => 'File upload error: ' . $e->getMessage()
+        ], 500);
+    }
+
+    // Proceed with payment creation only after successful upload
     DB::beginTransaction();
     try {
         $payment = Payment::create([
@@ -316,31 +359,45 @@ class BusinessController extends Controller
             'amount' => $request->amount,
             'payment_type' => 'business_payment',
             'status' => 'pending',
-            'receipt_path' => null, // to be updated by job
+            'receipt_path' => $receiptUrl,
             'notes' => $request->notes,
             'payment_date' => now()
         ]);
 
+        // Just log the submission - no balance changes until admin approves
         $business->submitPayment($request->amount, $payment->id);
-
-        // Dispatch background job
-        UploadReceiptToS3::dispatch($localPath, $filename, $payment->id);
 
         DB::commit();
 
         return response()->json([
             'success' => true,
-            'message' => 'Payment submitted successfully. Receipt will be uploaded shortly.',
+            'message' => 'Payment submitted successfully. Admin approval will restore your spending power.',
             'data' => [
                 'payment' => $payment,
+                'receipt_url' => $receiptUrl,
                 'current_debt' => $business->getOutstandingDebt(),
                 'potential_restored_credit' => $request->amount,
             ]
         ], 201);
 
     } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Payment submission failed', ['error' => $e->getMessage()]);
+        DB::rollback();
+
+        // Clean up uploaded file if payment creation fails
+        try {
+            Storage::disk('s3')->delete($receiptPath);
+        } catch (\Exception $cleanupError) {
+            Log::warning('Failed to cleanup uploaded file after payment creation failure', [
+                'file_path' => $receiptPath,
+                'cleanup_error' => $cleanupError->getMessage()
+            ]);
+        }
+
+        Log::error('Payment creation failed after successful upload', [
+            'error' => $e->getMessage(),
+            'uploaded_file' => $receiptPath
+        ]);
+
         return response()->json([
             'success' => false,
             'message' => 'Failed to submit payment',
@@ -348,6 +405,7 @@ class BusinessController extends Controller
         ], 500);
     }
 }
+
     /**
      * @OA\Get(
      *     path="/api/business/purchase-orders/{po}/payments",
