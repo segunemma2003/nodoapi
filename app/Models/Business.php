@@ -671,7 +671,7 @@ public function getActivitySummary($days = 30)
         if ($principal <= 0) return 0;
 
         $config = $rateConfig ?? $this->getInterestRateConfig();
-        $rate = $config['rate'];
+        $rate = $config['rate'] ?? 0;
         $frequency = $config['frequency'];
 
         if ($rate <= 0) return 0;
