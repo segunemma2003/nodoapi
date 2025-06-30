@@ -559,7 +559,7 @@ class Business extends Authenticatable
     {
         // Use direct relationship to avoid join ambiguity
         $totalPayments = $this->directPayments()
-                             ->where('status', 'confirmed') // No ambiguity in direct relationship
+                             ->where('payments.status', 'confirmed') // No ambiguity in direct relationship
                              ->count();
 
         if ($totalPayments === 0) return 0;

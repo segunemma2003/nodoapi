@@ -74,15 +74,15 @@ class BusinessController extends Controller
                 // 'business_age_months' => $business->created_at->diffInMonths(now()),
             ],
             'statistics' => [
-                // 'total_vendors' => $business->vendors()->count(),
-                // 'active_vendors' => $business->vendors()->active()->count(),
-                // 'total_purchase_orders' => $business->purchaseOrders()->count(),
-                // 'draft_purchase_orders' => $business->purchaseOrders()->where('status', 'draft')->count(),
-                // 'pending_purchase_orders' => $business->purchaseOrders()->where('status', 'pending')->count(),
-                // 'approved_purchase_orders' => $business->purchaseOrders()->where('status', 'approved')->count(),
+                'total_vendors' => $business->vendors()->count(),
+                'active_vendors' => $business->vendors()->active()->count(),
+                'total_purchase_orders' => $business->purchaseOrders()->count(),
+                'draft_purchase_orders' => $business->purchaseOrders()->where('purchaseOrder.status', 'draft')->count(),
+                // 'pending_purchase_orders' => $business->purchaseOrders()->where('purchaseOrder.status', 'pending')->count(),
+                // 'approved_purchase_orders' => $business->purchaseOrders()->where('purchaseOrder.status', 'approved')->count(),
                 // 'total_spent' => $business->purchaseOrders()->sum('net_amount'),
-                // 'total_payments_made' => $business->payments()->where('status', 'confirmed')->sum('amount'),
-                // 'pending_payments' => $business->payments()->where('status', 'pending')->count(),
+                // 'total_payments_made' => $business->payments()->where('payments.status', 'confirmed')->sum('amount'),
+                // 'pending_payments' => $business->payments()->where('payments.status', 'pending')->count(),
             ],
         ];
 
@@ -392,9 +392,9 @@ class BusinessController extends Controller
                     'outstanding_amount' => $po->outstanding_amount,
                     'payment_status' => $po->payment_status,
                     'payments_count' => $payments->count(),
-                    'confirmed_payments' => $payments->where('status', 'confirmed')->count(),
-                    'pending_payments' => $payments->where('status', 'pending')->count(),
-                    'potential_credit_restoration' => $payments->where('status', 'pending')->sum('amount'),
+                    'confirmed_payments' => $payments->where('payments.status', 'confirmed')->count(),
+                    'pending_payments' => $payments->where('payments.status', 'pending')->count(),
+                    'potential_credit_restoration' => $payments->where('payments.status', 'pending')->sum('amount'),
                 ]
             ]
         ]);
@@ -493,7 +493,7 @@ class BusinessController extends Controller
         $outstandingOrders = $business->purchaseOrders()
             ->whereIn('payment_status', ['unpaid', 'partially_paid'])
             ->with(['vendor', 'payments' => function($query) {
-                $query->where('status', 'confirmed');
+                $query->where('payments.status', 'confirmed');
             }])
             ->orderBy('order_date', 'desc')
             ->get();
@@ -577,7 +577,7 @@ class BusinessController extends Controller
         }
 
         $pendingPayments = $business->payments()
-            ->where('status', 'pending')
+            ->where('payments.status', 'pending')
             ->with(['purchaseOrder.vendor'])
             ->orderBy('created_at', 'desc')
             ->get();
@@ -675,7 +675,7 @@ class BusinessController extends Controller
 
         // Filter by status if provided
         if ($request->filled('status')) {
-            $query->where('status', $request->status);
+            $query->where('purchaseOrders.status', $request->status);
         }
 
         // Filter by payment status if provided
@@ -932,8 +932,8 @@ public function getPurchaseTracker(Request $request)
         'total_payments_made' => $business->directPayments()->where('payments.status', 'confirmed')
             ->whereYear('confirmed_at', $year)
             ->sum('amount'),
-        // 'pending_payments' => $business->payments()->where('status', 'pending')->sum('amount'),
-        // 'payment_score' => $business->getPaymentScore(),
+        'pending_payments' => $business->payments()->where('payments.status', 'pending')->sum('amount'),
+        'payment_score' => $business->getPaymentScore(),
         'avg_payment_time' => $business->getAveragePaymentTime(),
     ];
 
