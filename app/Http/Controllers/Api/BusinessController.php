@@ -305,9 +305,18 @@ class BusinessController extends Controller
         // Store receipt file
 
 
-        // Store receipt file to S3
-        $receiptPath = Storage::disk('s3')->put('receipts' , $request->receipt);
+try {
+    $receiptPath = Storage::disk('s3')->put('receipts', $request->file('receipt'));
 
+    Log::info('Upload success', [
+        'path' => $receiptPath,
+    ]);
+} catch (\Exception $e) {
+    Log::error('Upload failed', [
+        'message' => $e->getMessage(),
+        'trace' => $e->getTraceAsString(),
+    ]);
+}
         // Get the full S3 URL
         $receiptUrl = Storage::disk('s3')->url($receiptPath);
 
