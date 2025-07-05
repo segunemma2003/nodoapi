@@ -9,7 +9,7 @@ class Vendor extends Model
 {
     use HasFactory;
 
-    protected $fillable = [
+     protected $fillable = [
         'name',
         'email',
         'phone',
@@ -19,10 +19,11 @@ class Vendor extends Model
         'payment_terms',
         'is_active',
         'business_id',
-         'account_number',    // NEW
-    'bank_code',         // NEW
-    'bank_name',         // NEW
-    'recipient_code',
+        'account_number',
+        'bank_code',
+        'bank_name',
+        'account_holder_name',  // NEW: Store verified name from bank
+        'recipient_code',       // Paystack recipient code
     ];
 
     protected function casts(): array
@@ -53,6 +54,25 @@ class Vendor extends Model
     public function scopeForBusiness($query, $businessId)
     {
         return $query->where('business_id', $businessId);
+    }
+
+    // Check if vendor has complete bank details for payments
+    public function hasCompletePaymentDetails()
+    {
+        return !empty($this->account_number) &&
+               !empty($this->bank_code) &&
+               !empty($this->bank_name);
+    }
+
+    // Get formatted bank details for display
+    public function getBankDetailsFormatted()
+    {
+        if (!$this->hasCompletePaymentDetails()) {
+            return 'Bank details not configured';
+        }
+
+        return "{$this->bank_name} - {$this->account_number}" .
+               ($this->account_holder_name ? " ({$this->account_holder_name})" : '');
     }
 
     // Generate unique vendor code

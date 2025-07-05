@@ -21,6 +21,8 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Dompdf\Dompdf;
+use Dompdf\Options;
 
 /**
  * @OA\Tag(
@@ -896,12 +898,19 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
         $business = $po->business;
         $vendor = $po->vendor;
 
-        // Check if vendor has bank account details
-        if (!$vendor->account_number || !$vendor->bank_code) {
+        // Enhanced validation: Check if vendor has complete bank account details
+        if (!$vendor->hasCompletePaymentDetails()) {
             DB::rollback();
             return response()->json([
                 'success' => false,
-                'message' => 'Vendor bank account details not configured. Please update vendor information.'
+                'message' => 'Vendor bank account details incomplete. Required: account_number, bank_code, bank_name.',
+                'vendor_details' => [
+                    'name' => $vendor->name,
+                    'email' => $vendor->email,
+                    'has_account_number' => !empty($vendor->account_number),
+                    'has_bank_code' => !empty($vendor->bank_code),
+                    'has_bank_name' => !empty($vendor->bank_name),
+                ]
             ], 400);
         }
 
@@ -913,7 +922,7 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
             'notes' => ($po->notes ?? '') . "\nAdmin notes: " . ($request->notes ?? 'Approved'),
         ]);
 
-        // Make automatic payment to VENDOR (not business)
+        // Make automatic payment to VENDOR
         $paymentResult = $this->makePaymentToVendor($po, $vendor);
 
         if (!$paymentResult['success']) {
@@ -928,7 +937,8 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
             return response()->json([
                 'success' => false,
                 'message' => 'Purchase order approval failed due to payment error',
-                'error' => $paymentResult['error']
+                'error' => $paymentResult['error'],
+                'vendor_bank_details' => $vendor->getBankDetailsFormatted()
             ], 500);
         }
 
@@ -956,6 +966,7 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
                     'payment_status' => 'completed',
                     'recipient' => $vendor->name,
                     'recipient_account' => $vendor->account_number,
+                    'recipient_bank' => $vendor->bank_name,
                 ],
                 'documents' => [
                     'purchase_order_pdf' => $pdfResults['po_pdf_path'] ?? null,
@@ -968,6 +979,7 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
         DB::rollback();
         Log::error('Purchase order approval failed', [
             'po_id' => $po->id,
+            'vendor_bank_details' => $vendor->getBankDetailsFormatted(),
             'error' => $e->getMessage(),
             'trace' => $e->getTraceAsString()
         ]);
@@ -1120,42 +1132,129 @@ private function generatePurchaseOrderHTML(PurchaseOrder $po)
         <meta charset='utf-8'>
         <title>Purchase Order #{$po->po_number}</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .header { text-align: center; margin-bottom: 30px; }
-            .company-info { margin-bottom: 20px; }
-            .po-details { display: table; width: 100%; margin-bottom: 20px; }
-            .po-left, .po-right { display: table-cell; width: 50%; vertical-align: top; }
-            .items-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-            .items-table th, .items-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-            .items-table th { background-color: #f2f2f2; }
-            .totals { text-align: right; margin-top: 20px; }
-            .total-row { margin: 5px 0; }
-            .final-total { font-weight: bold; font-size: 18px; }
+            body {
+                font-family: 'DejaVu Sans', Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                color: #333;
+                line-height: 1.6;
+            }
+            .header {
+                text-align: center;
+                margin-bottom: 30px;
+                border-bottom: 3px solid #4CAF50;
+                padding-bottom: 20px;
+            }
+            .header h1 {
+                color: #4CAF50;
+                margin: 0;
+                font-size: 28px;
+            }
+            .header h2 {
+                color: #666;
+                margin: 10px 0 0 0;
+                font-size: 20px;
+            }
+            .company-info {
+                margin-bottom: 20px;
+                padding: 15px;
+                background-color: #f9f9f9;
+                border-radius: 5px;
+            }
+            .po-details {
+                display: table;
+                width: 100%;
+                margin-bottom: 30px;
+            }
+            .po-left, .po-right {
+                display: table-cell;
+                width: 50%;
+                vertical-align: top;
+                padding: 0 10px;
+            }
+            .po-right {
+                text-align: right;
+            }
+            .items-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .items-table th, .items-table td {
+                border: 1px solid #ddd;
+                padding: 12px 8px;
+                text-align: left;
+            }
+            .items-table th {
+                background-color: #4CAF50;
+                color: white;
+                font-weight: bold;
+            }
+            .items-table tr:nth-child(even) {
+                background-color: #f2f2f2;
+            }
+            .totals {
+                text-align: right;
+                margin-top: 30px;
+                padding: 20px;
+                background-color: #f9f9f9;
+                border-radius: 5px;
+            }
+            .total-row {
+                margin: 8px 0;
+                font-size: 16px;
+            }
+            .final-total {
+                font-weight: bold;
+                font-size: 20px;
+                color: #4CAF50;
+                border-top: 2px solid #4CAF50;
+                padding-top: 10px;
+            }
+            .status-badge {
+                display: inline-block;
+                padding: 5px 15px;
+                border-radius: 20px;
+                color: white;
+                font-weight: bold;
+                text-transform: uppercase;
+                background-color: #4CAF50;
+            }
+            .footer {
+                margin-top: 40px;
+                text-align: center;
+                color: #666;
+                font-size: 14px;
+                border-top: 1px solid #ddd;
+                padding-top: 20px;
+            }
         </style>
     </head>
     <body>
         <div class='header'>
             <h1>PURCHASE ORDER</h1>
             <h2>#{$po->po_number}</h2>
+            <span class='status-badge'>APPROVED</span>
         </div>
 
         <div class='po-details'>
             <div class='po-left'>
-                <h3>From:</h3>
+                <h3 style='color: #4CAF50; margin-bottom: 15px;'>From:</h3>
                 <div class='company-info'>
-                    <strong>{$business->name}</strong><br>
-                    {$business->email}<br>
-                    " . ($business->phone ? $business->phone . '<br>' : '') . "
-                    " . ($business->address ? nl2br($business->address) : '') . "
+                    <strong style='font-size: 18px;'>{$business->name}</strong><br>
+                    <strong>Email:</strong> {$business->email}<br>
+                    " . ($business->phone ? "<strong>Phone:</strong> {$business->phone}<br>" : '') . "
+                    " . ($business->address ? "<strong>Address:</strong><br>" . nl2br($business->address) : '') . "
                 </div>
             </div>
             <div class='po-right'>
-                <h3>To:</h3>
+                <h3 style='color: #4CAF50; margin-bottom: 15px;'>To:</h3>
                 <div class='company-info'>
-                    <strong>{$vendor->name}</strong><br>
-                    {$vendor->email}<br>
-                    " . ($vendor->phone ? $vendor->phone . '<br>' : '') . "
-                    " . ($vendor->address ? nl2br($vendor->address) : '') . "
+                    <strong style='font-size: 18px;'>{$vendor->name}</strong><br>
+                    <strong>Email:</strong> {$vendor->email}<br>
+                    " . ($vendor->phone ? "<strong>Phone:</strong> {$vendor->phone}<br>" : '') . "
+                    " . ($vendor->address ? "<strong>Address:</strong><br>" . nl2br($vendor->address) : '') . "
                 </div>
             </div>
         </div>
@@ -1173,16 +1272,16 @@ private function generatePurchaseOrderHTML(PurchaseOrder $po)
             </div>
         </div>
 
-        " . ($po->description ? "<div><strong>Description:</strong> {$po->description}</div>" : '') . "
+        " . ($po->description ? "<div style='margin: 20px 0; padding: 15px; background-color: #f0f8ff; border-left: 4px solid #4CAF50;'><strong>Description:</strong> {$po->description}</div>" : '') . "
 
         <table class='items-table'>
             <thead>
                 <tr>
                     <th>Item</th>
                     <th>Description</th>
-                    <th>Quantity</th>
-                    <th>Unit Price</th>
-                    <th>Total</th>
+                    <th style='text-align: center;'>Quantity</th>
+                    <th style='text-align: right;'>Unit Price</th>
+                    <th style='text-align: right;'>Total</th>
                 </tr>
             </thead>
             <tbody>";
@@ -1191,11 +1290,11 @@ private function generatePurchaseOrderHTML(PurchaseOrder $po)
         $itemTotal = $item['quantity'] * $item['unit_price'];
         $html .= "
                 <tr>
-                    <td>{$item['name']}</td>
+                    <td><strong>{$item['name']}</strong></td>
                     <td>" . ($item['description'] ?? 'N/A') . "</td>
-                    <td>" . number_format($item['quantity'], 2) . "</td>
-                    <td>₦" . number_format($item['unit_price'], 2) . "</td>
-                    <td>₦" . number_format($itemTotal, 2) . "</td>
+                    <td style='text-align: center;'>" . number_format($item['quantity'], 2) . "</td>
+                    <td style='text-align: right;'>₦" . number_format($item['unit_price'], 2) . "</td>
+                    <td style='text-align: right;'><strong>₦" . number_format($itemTotal, 2) . "</strong></td>
                 </tr>";
     }
 
@@ -1214,20 +1313,21 @@ private function generatePurchaseOrderHTML(PurchaseOrder $po)
     }
 
     $html .= "
-            <div class='total-row final-total'>Total: ₦" . number_format($po->net_amount, 2) . "</div>
+            <div class='total-row final-total'>Total Amount: ₦" . number_format($po->net_amount, 2) . "</div>
         </div>
 
-        " . ($po->notes ? "<div style='margin-top: 30px;'><strong>Notes:</strong><br>" . nl2br($po->notes) . "</div>" : '') . "
+        " . ($po->notes ? "<div style='margin-top: 30px; padding: 15px; background-color: #fff9c4; border-radius: 5px;'><strong>Notes:</strong><br>" . nl2br($po->notes) . "</div>" : '') . "
 
-        <div style='margin-top: 40px; text-align: center; color: #666;'>
-            <p>This purchase order was approved on {$po->approved_at->format('F j, Y')} and payment has been processed.</p>
+        <div class='footer'>
+            <p><strong>This purchase order was approved on {$po->approved_at->format('F j, Y')} and payment has been processed.</strong></p>
+            <p>For any inquiries, please contact us at " . config('mail.from.address') . "</p>
+            <p>Generated on " . now()->format('F j, Y g:i A') . "</p>
         </div>
     </body>
     </html>";
 
     return $html;
 }
-
 /**
  * Generate Payment Receipt HTML for PDF
  */
@@ -1243,14 +1343,81 @@ private function generatePaymentReceiptHTML(PurchaseOrder $po, $paymentResult)
         <meta charset='utf-8'>
         <title>Payment Receipt - {$paymentResult['reference']}</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .header { text-align: center; margin-bottom: 30px; }
-            .receipt-info { margin: 20px 0; }
-            .info-table { width: 100%; border-collapse: collapse; }
-            .info-table td { padding: 10px; border-bottom: 1px solid #eee; }
-            .label { font-weight: bold; width: 200px; }
-            .amount { font-size: 24px; font-weight: bold; color: #28a745; }
-            .footer { margin-top: 40px; text-align: center; color: #666; }
+            body {
+                font-family: 'DejaVu Sans', Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                color: #333;
+                line-height: 1.6;
+            }
+            .header {
+                text-align: center;
+                margin-bottom: 30px;
+                border-bottom: 3px solid #28a745;
+                padding-bottom: 20px;
+            }
+            .header h1 {
+                color: #28a745;
+                margin: 0;
+                font-size: 28px;
+            }
+            .header h2 {
+                color: #666;
+                margin: 10px 0 0 0;
+                font-size: 18px;
+            }
+            .receipt-info {
+                margin: 20px 0;
+            }
+            .info-table {
+                width: 100%;
+                border-collapse: collapse;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .info-table td {
+                padding: 15px;
+                border-bottom: 1px solid #eee;
+                vertical-align: top;
+            }
+            .info-table tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+            .label {
+                font-weight: bold;
+                width: 200px;
+                color: #555;
+            }
+            .amount {
+                font-size: 28px;
+                font-weight: bold;
+                color: #28a745;
+                text-align: center;
+                padding: 20px;
+                background-color: #f0f8f0;
+                border-radius: 10px;
+                margin: 20px 0;
+            }
+            .status-success {
+                color: #28a745;
+                font-weight: bold;
+                font-size: 18px;
+            }
+            .section-title {
+                color: #28a745;
+                font-size: 18px;
+                font-weight: bold;
+                margin: 30px 0 15px 0;
+                border-bottom: 2px solid #28a745;
+                padding-bottom: 5px;
+            }
+            .footer {
+                margin-top: 40px;
+                text-align: center;
+                color: #666;
+                font-size: 14px;
+                border-top: 1px solid #ddd;
+                padding-top: 20px;
+            }
         </style>
     </head>
     <body>
@@ -1259,6 +1426,9 @@ private function generatePaymentReceiptHTML(PurchaseOrder $po, $paymentResult)
             <h2>#{$paymentResult['reference']}</h2>
         </div>
 
+        <div class='amount'>₦" . number_format($paymentResult['amount'], 2) . "</div>
+
+        <h3 class='section-title'>Payment Information</h3>
         <div class='receipt-info'>
             <table class='info-table'>
                 <tr>
@@ -1267,7 +1437,7 @@ private function generatePaymentReceiptHTML(PurchaseOrder $po, $paymentResult)
                 </tr>
                 <tr>
                     <td class='label'>Payment Reference:</td>
-                    <td>{$paymentResult['reference']}</td>
+                    <td><strong>{$paymentResult['reference']}</strong></td>
                 </tr>
                 <tr>
                     <td class='label'>Transfer Code:</td>
@@ -1275,29 +1445,25 @@ private function generatePaymentReceiptHTML(PurchaseOrder $po, $paymentResult)
                 </tr>
                 <tr>
                     <td class='label'>Purchase Order:</td>
-                    <td>#{$po->po_number}</td>
-                </tr>
-                <tr>
-                    <td class='label'>Amount Paid:</td>
-                    <td class='amount'>₦" . number_format($paymentResult['amount'], 2) . "</td>
+                    <td><strong>#{$po->po_number}</strong></td>
                 </tr>
                 <tr>
                     <td class='label'>Payment Method:</td>
                     <td>Bank Transfer (Paystack)</td>
                 </tr>
                 <tr>
-                    <td class='label'>Currency:</td>
-                    <td>Nigerian Naira (NGN)</td>
+                    <td class='label'>Status:</td>
+                    <td><span class='status-success'>COMPLETED</span></td>
                 </tr>
             </table>
         </div>
 
+        <h3 class='section-title'>Recipient Details</h3>
         <div class='receipt-info'>
-            <h3>Recipient Details</h3>
             <table class='info-table'>
                 <tr>
                     <td class='label'>Vendor Name:</td>
-                    <td>{$vendor->name}</td>
+                    <td><strong>{$vendor->name}</strong></td>
                 </tr>
                 <tr>
                     <td class='label'>Account Number:</td>
@@ -1308,18 +1474,18 @@ private function generatePaymentReceiptHTML(PurchaseOrder $po, $paymentResult)
                     <td>{$vendor->bank_name}</td>
                 </tr>
                 <tr>
-                    <td class='label'>Recipient Code:</td>
-                    <td>{$paymentResult['recipient_code']}</td>
+                    <td class='label'>Account Holder:</td>
+                    <td>" . ($vendor->account_holder_name ?? $vendor->name) . "</td>
                 </tr>
             </table>
         </div>
 
+        <h3 class='section-title'>Transaction Details</h3>
         <div class='receipt-info'>
-            <h3>Transaction Details</h3>
             <table class='info-table'>
                 <tr>
                     <td class='label'>Paying Business:</td>
-                    <td>{$business->name}</td>
+                    <td><strong>{$business->name}</strong></td>
                 </tr>
                 <tr>
                     <td class='label'>Business Email:</td>
@@ -1327,41 +1493,60 @@ private function generatePaymentReceiptHTML(PurchaseOrder $po, $paymentResult)
                 </tr>
                 <tr>
                     <td class='label'>Description:</td>
-                    <td>Payment for Purchase Order #{$po->po_number} - {$po->description}</td>
+                    <td>Payment for Purchase Order #{$po->po_number}" . ($po->description ? " - {$po->description}" : "") . "</td>
                 </tr>
                 <tr>
-                    <td class='label'>Status:</td>
-                    <td style='color: #28a745; font-weight: bold;'>COMPLETED</td>
+                    <td class='label'>Processing Fee:</td>
+                    <td>Covered by FoodStuff Platform</td>
                 </tr>
             </table>
         </div>
 
         <div class='footer'>
-            <p>This is an automated receipt generated upon successful payment processing.</p>
+            <p><strong>This is an automated receipt generated upon successful payment processing.</strong></p>
             <p>For any inquiries, please contact support at " . config('mail.from.address') . "</p>
+            <p>Generated on " . now()->format('F j, Y g:i A') . "</p>
         </div>
     </body>
     </html>";
 }
-
 /**
  * Generate PDF from HTML using DomPDF (you'll need to install this)
  * Run: composer require dompdf/dompdf
  */
 private function generatePDFFromHTML($html, $filePath)
 {
-    // Using simple file-based PDF generation for now
-    // You can install DomPDF later for better PDF generation
+    try {
+        // Create DomPDF instance with options
+        $options = new Options();
+        $options->set('defaultFont', 'Arial');
+        $options->set('isRemoteEnabled', true);
+        $options->set('isHtml5ParserEnabled', true);
 
-    // For now, save as HTML (you can convert to PDF later)
-    $htmlPath = str_replace('.pdf', '.html', $filePath);
-    file_put_contents($htmlPath, $html);
+        $dompdf = new Dompdf($options);
 
-    // Create a simple text-based receipt for now
-    $textContent = strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $html));
-    file_put_contents($filePath, $textContent);
+        // Load HTML content
+        $dompdf->loadHtml($html);
 
-    return true;
+        // Set paper size and orientation
+        $dompdf->setPaper('A4', 'portrait');
+
+        // Render PDF
+        $dompdf->render();
+
+        // Save PDF to file
+        file_put_contents($filePath, $dompdf->output());
+
+        return true;
+
+    } catch (\Exception $e) {
+        Log::error('PDF generation failed', [
+            'file_path' => $filePath,
+            'error' => $e->getMessage()
+        ]);
+
+        return false;
+    }
 }
 
 /**

@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\Vendor;
 use App\Models\PurchaseOrder;
 use App\Models\SystemSetting;
+use App\Services\PaystackService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -105,41 +106,64 @@ class BusinessController extends Controller
      * )
      */
     public function createVendor(Request $request)
-    {
-        $business = Auth::user();
-        if(!$business || !($business instanceof Business)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized - Business access required'
-            ], 403);
-        }
-
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|unique:vendors,email',
-            'phone' => 'nullable|string|max:20',
-            'address' => 'nullable|string',
-            'category' => 'nullable|string|max:100',
-            'payment_terms' => 'nullable|array',
-        ]);
-
-        $vendor = $business->vendors()->create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'phone' => $request->phone,
-            'address' => $request->address,
-            'category' => $request->category,
-            'payment_terms' => $request->payment_terms,
-            'vendor_code' => Vendor::generateVendorCode($business->id),
-        ]);
-
+{
+    $business = Auth::user();
+    if(!$business || !($business instanceof Business)) {
         return response()->json([
-            'success' => true,
-            'message' => 'Vendor created successfully',
-            'data' => $vendor
-        ], 201);
+            'success' => false,
+            'message' => 'Unauthorized - Business access required'
+        ], 403);
     }
 
+    $request->validate([
+        'name' => 'required|string|max:255',
+        'email' => 'required|email|unique:vendors,email',
+        'phone' => 'nullable|string|max:20',
+        'address' => 'nullable|string',
+        'category' => 'nullable|string|max:100',
+        'payment_terms' => 'nullable|array',
+        // NEW: Bank details validation for payments
+        'account_number' => 'required|string|min:10|max:10',
+        'bank_code' => 'required|string|size:3',
+        'bank_name' => 'required|string|max:255',
+    ]);
+
+    // Optional: Verify bank account with Paystack
+    $paystackService = app(PaystackService::class);
+    $accountVerification = $paystackService->verifyAccountNumber(
+        $request->account_number,
+        $request->bank_code
+    );
+
+    if (!$accountVerification['success']) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Invalid bank account details: ' . $accountVerification['message']
+        ], 400);
+    }
+
+    $vendor = $business->vendors()->create([
+        'name' => $request->name,
+        'email' => $request->email,
+        'phone' => $request->phone,
+        'address' => $request->address,
+        'category' => $request->category,
+        'payment_terms' => $request->payment_terms,
+        'vendor_code' => Vendor::generateVendorCode($business->id),
+        // NEW: Bank details
+        'account_number' => $request->account_number,
+        'bank_code' => $request->bank_code,
+        'bank_name' => $request->bank_name,
+        // Store verified account holder name
+        'account_holder_name' => $accountVerification['data']['account_name'] ?? null,
+    ]);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Vendor created successfully with verified bank account',
+        'data' => $vendor
+    ], 201);
+}
     /**
      * @OA\Post(
      *     path="/api/business/purchase-orders",

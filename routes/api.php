@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\BusinessController;
 use App\Http\Controllers\Api\AdminInterestRateController;
 use App\Http\Controllers\Api\AdminSupportController;
 use App\Http\Controllers\Api\BusinessSupportController;
+use Illuminate\Http\Request;
 
 // Authentication routes
 Route::prefix('auth')->group(function () {
@@ -211,4 +212,30 @@ Route::get('/test', function () {
         'timestamp' => now(),
         'app_url' => config('app.url')
     ]);
+});
+
+
+
+Route::prefix('webhooks')->group(function () {
+    Route::post('paystack', [App\Http\Controllers\Api\PaystackWebhookController::class, 'handleWebhook']);
+});
+
+Route::prefix('banks')->group(function () {
+    Route::get('/', function () {
+        $paystackService = app(App\Services\PaystackService::class);
+        return $paystackService->listBanks();
+    });
+
+    Route::post('verify-account', function (Request $request) {
+        $request->validate([
+            'account_number' => 'required|string|size:10',
+            'bank_code' => 'required|string|size:3'
+        ]);
+
+        $paystackService = app(App\Services\PaystackService::class);
+        return $paystackService->verifyAccountNumber(
+            $request->account_number,
+            $request->bank_code
+        );
+    });
 });

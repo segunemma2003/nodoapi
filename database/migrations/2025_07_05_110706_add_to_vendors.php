@@ -12,10 +12,14 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('vendors', function (Blueprint $table) {
-            $table->string('account_number')->nullable();
-            $table->string('bank_code')->nullable();
-            $table->string('bank_name')->nullable();
-            $table->string('recipient_code')->nullable();
+             $table->string('account_number', 10)->nullable()->after('payment_terms');
+            $table->string('bank_code', 3)->nullable()->after('account_number');
+            $table->string('bank_name')->nullable()->after('bank_code');
+            $table->string('account_holder_name')->nullable()->after('bank_name');
+            $table->string('recipient_code')->nullable()->after('account_holder_name');
+
+            // Add index for faster lookups
+            $table->index(['account_number', 'bank_code']);
         });
     }
 
@@ -25,7 +29,13 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('vendors', function (Blueprint $table) {
-            //
+           $table->dropColumn([
+                'account_number',
+                'bank_code',
+                'bank_name',
+                'account_holder_name',
+                'recipient_code'
+            ]);
         });
     }
 };

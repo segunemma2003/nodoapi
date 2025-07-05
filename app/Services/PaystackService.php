@@ -97,7 +97,7 @@ class PaystackService
     }
 
     /**
-     * Verify transfer status
+     * Verify transfer status by transfer code
      */
     public function verifyTransfer($transferCode)
     {
@@ -132,6 +132,57 @@ class PaystackService
                 'message' => 'Transfer verification failed: ' . $e->getMessage()
             ];
         }
+    }
+
+    /**
+     * NEW: Check transfer status and handle different states
+     */
+    public function getTransferStatus($transferCode)
+    {
+        $result = $this->verifyTransfer($transferCode);
+
+        if (!$result['success']) {
+            return $result;
+        }
+
+        $transfer = $result['data'];
+        $status = $transfer['status'] ?? 'unknown';
+
+        return [
+            'success' => true,
+            'status' => $status,
+            'data' => $transfer,
+            'is_successful' => in_array($status, ['success', 'pending']),
+            'is_failed' => in_array($status, ['failed', 'reversed']),
+            'needs_attention' => in_array($status, ['otp', 'pending']),
+            'message' => $this->getStatusMessage($status)
+        ];
+    }
+
+    /**
+     * NEW: Get human-readable status message
+     */
+    private function getStatusMessage($status)
+    {
+        return match($status) {
+            'success' => 'Transfer completed successfully',
+            'pending' => 'Transfer is being processed',
+            'failed' => 'Transfer failed',
+            'reversed' => 'Transfer was reversed',
+            'otp' => 'Transfer requires OTP verification from recipient bank',
+            default => 'Transfer status unknown'
+        };
+    }
+
+    /**
+     * NEW: Verify webhook signature (for webhook security)
+     */
+    public function verifyWebhookSignature($payload, $signature)
+    {
+        $secretKey = $this->secretKey;
+        $computedSignature = hash_hmac('sha512', $payload, $secretKey);
+
+        return hash_equals($signature, $computedSignature);
     }
 
     /**
@@ -204,41 +255,6 @@ class PaystackService
     }
 
     /**
-     * Get transfer by reference
-     */
-    public function getTransferByReference($reference)
-    {
-        try {
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $this->secretKey,
-            ])->get($this->baseUrl . '/transfer', [
-                'reference' => $reference
-            ]);
-
-            $responseData = $response->json();
-
-            if ($response->successful() && $responseData['status']) {
-                return [
-                    'success' => true,
-                    'data' => $responseData['data'],
-                    'message' => 'Transfer retrieved successfully'
-                ];
-            }
-
-            return [
-                'success' => false,
-                'message' => $responseData['message'] ?? 'Transfer not found'
-            ];
-
-        } catch (\Exception $e) {
-            return [
-                'success' => false,
-                'message' => 'Failed to retrieve transfer: ' . $e->getMessage()
-            ];
-        }
-    }
-
-    /**
      * Get wallet balance
      */
     public function getBalance()
@@ -269,39 +285,5 @@ class PaystackService
                 'message' => 'Failed to retrieve balance: ' . $e->getMessage()
             ];
         }
-    }
-
-    /**
-     * Legacy method for backward compatibility
-     * @deprecated Use createTransferRecipient instead
-     */
-    public function transferToVendor($vendor, $amount, $reference, $description)
-    {
-        // Create recipient data
-        $recipientData = [
-            'type' => 'nuban',
-            'name' => $vendor->name,
-            'account_number' => $vendor->account_number,
-            'bank_code' => $vendor->bank_code,
-            'currency' => 'NGN'
-        ];
-
-        // Create recipient
-        $recipient = $this->createTransferRecipient($recipientData);
-
-        if (!$recipient['success']) {
-            return $recipient;
-        }
-
-        // Initiate transfer
-        $transferData = [
-            'source' => 'balance',
-            'amount' => $amount * 100, // Convert to kobo
-            'recipient' => $recipient['data']['recipient_code'],
-            'reference' => $reference,
-            'reason' => $description
-        ];
-
-        return $this->initiateTransfer($transferData);
     }
 }
