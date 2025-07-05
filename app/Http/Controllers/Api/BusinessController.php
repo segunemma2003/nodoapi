@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\PurchaseOrderCreated;
 use App\Models\Business;
 use App\Models\Payment;
 use App\Models\Vendor;
@@ -12,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -158,7 +160,7 @@ class BusinessController extends Controller
      *     @OA\Response(response=201, description="Purchase order created - platform will pay vendor")
      * )
      */
-    public function createPurchaseOrder(Request $request)
+     public function createPurchaseOrder(Request $request)
     {
         $business = Auth::user();
         if(!$business || !($business instanceof Business)) {
@@ -168,21 +170,55 @@ class BusinessController extends Controller
             ], 403);
         }
 
-        $request->validate([
-            'vendor_id' => 'required|exists:vendors,id',
-            'net_amount' => 'required|numeric|min:1',
-            'order_date' => 'required|date|before_or_equal:today',
-            'expected_delivery_date' => 'nullable|date|after:order_date',
-            'description' => 'required|string|max:500',
-            'notes' => 'nullable|string|max:1000',
-            'status' => 'nullable|in:draft,pending',
-        ]);
-
+       $request->validate([
+        'vendor_id' => 'required|exists:vendors,id',
+        'items' => 'required|array|min:1|max:50',
+        'items.*.name' => 'required|string|max:255',
+        'items.*.description' => 'nullable|string|max:500',
+        'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
+        'items.*.unit_price' => 'required|numeric|min:0',
+        'order_date' => 'required|date|before_or_equal:today',
+        'expected_delivery_date' => 'nullable|date|after:order_date',
+        'description' => 'nullable|string|max:500',
+        'notes' => 'nullable|string|max:1000',
+        'status' => 'nullable|in:draft,pending',
+        'tax_percentage' => 'nullable|numeric|min:0|max:100',
+        'discount_amount' => 'nullable|numeric|min:0',
+    ]);
         // Verify vendor belongs to business
         $vendor = $business->vendors()->findOrFail($request->vendor_id);
 
-        $netAmount = $request->net_amount;
         $status = $request->status ?? 'pending';
+
+        // Calculate totals from items
+        $items = collect($request->items)->map(function ($item) {
+        $lineTotal = $item['quantity'] * $item['unit_price'];
+        return [
+            'name' => $item['name'],
+            'description' => $item['description'] ?? '',
+            'quantity' => $item['quantity'],
+            'unit_price' => $item['unit_price'],
+            'line_total' => $lineTotal,
+        ];
+    });
+
+
+        // Calculate final amounts
+         $subtotal = $items->sum('line_total');
+          $taxAmount = ($request->tax_percentage ?? 0) / 100 * $subtotal;
+    $discountAmount = $request->discount_amount ?? 0;
+    $netAmount = $subtotal + $taxAmount - $discountAmount;
+        // $totalAmount = $calculatedTotal;
+        // $taxAmount = $request->tax_amount ?? 0;
+        // $discountAmount = $request->discount_amount ?? 0;
+        // $netAmount = $totalAmount + $taxAmount - $discountAmount;
+
+        // if ($netAmount <= 0) {
+        //     return response()->json([
+        //         'success' => false,
+        //         'message' => 'Net amount must be greater than zero'
+        //     ], 400);
+        // }
 
         // Check available spending power for pending orders
         if ($status === 'pending') {
@@ -204,40 +240,49 @@ class BusinessController extends Controller
         $paymentTermsDays = SystemSetting::getValue('default_payment_terms_days', 30);
         $dueDate = now()->addDays($paymentTermsDays)->toDateString();
 
-        DB::beginTransaction();
         try {
-            // Create purchase order
-            $purchaseOrder = PurchaseOrder::create([
-                'po_number' => PurchaseOrder::generatePoNumber($business->id),
-                'business_id' => $business->id,
-                'vendor_id' => $vendor->id,
-                'net_amount' => $netAmount,
-                'outstanding_amount' => $netAmount, // Initially, full amount is outstanding
-                'payment_status' => 'unpaid',
-                'status' => $status,
-                'order_date' => $request->order_date,
-                'due_date' => $dueDate,
-                'expected_delivery_date' => $request->expected_delivery_date,
-                'description' => $request->description,
-                'notes' => $request->notes,
-            ]);
+        // Create purchase order
+        $purchaseOrder = PurchaseOrder::create([
+            'po_number' => PurchaseOrder::generatePoNumber($business->id),
+            'business_id' => $business->id,
+            'vendor_id' => $vendor->id,
+            'items' => $items->toArray(),
+            'total_amount' => $subtotal,
+            'tax_amount' => $taxAmount,
+            'discount_amount' => $discountAmount,
+            'net_amount' => $netAmount,
+            'outstanding_amount' => $netAmount,
+            'payment_status' => 'unpaid',
+            'status' => $status,
+            'order_date' => $request->order_date,
+            'due_date' => $dueDate,
+            'expected_delivery_date' => $request->expected_delivery_date,
+            'description' => $request->description,
+            'notes' => $request->notes,
+        ]);
 
-            // For pending orders, reduce spending power and create debt
-            if ($status === 'pending') {
-                $business->createPurchaseOrder($netAmount, $purchaseOrder->id);
-            }
+        // For pending orders, reduce spending power and create debt
+        if ($status === 'pending') {
+            $business->createPurchaseOrder($netAmount, $purchaseOrder->id);
+        }
 
             DB::commit();
 
-            $message = $status === 'draft' ?
-                'Draft purchase order created successfully. Change status to pending to commit spending power.' :
-                'Purchase order created successfully. Platform will pay vendor directly.';
+            // Send notification to admin about pending PO
+            if ($status === 'pending') {
+                $this->notifyAdminOfPendingPO($purchaseOrder);
+            }
 
-            return response()->json([
-                'success' => true,
-                'message' => $message,
-                'data' => $purchaseOrder->load(['vendor', 'business'])
-            ], 201);
+             $message = $status === 'draft' ?
+            'Draft purchase order created successfully. Change status to pending to commit spending power.' :
+            'Purchase order created successfully and sent for admin approval.';
+
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'data' => $purchaseOrder->load(['vendor', 'business'])
+        ], 201);
+
 
         } catch (\Exception $e) {
             DB::rollback();
@@ -248,6 +293,7 @@ class BusinessController extends Controller
             ], 500);
         }
     }
+
 
     /**
      * @OA\Post(
@@ -1332,59 +1378,74 @@ public function uploadLogo(Request $request)
 /**
  * Get specific purchase order for business
  */
-public function getPurchaseOrder(PurchaseOrder $po)
-{
-    $business = Auth::user();
-    if(!$business || !($business instanceof Business)) {
+ public function getPurchaseOrder(PurchaseOrder $po)
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        // Verify PO belongs to business
+        if ($po->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order not found or access denied'
+            ], 404);
+        }
+
+        $po->load(['vendor', 'payments.confirmedBy', 'payments.rejectedBy']);
+
         return response()->json([
-            'success' => false,
-            'message' => 'Unauthorized - Business access required'
-        ], 403);
+            'success' => true,
+            'message' => 'Purchase order retrieved successfully',
+            'data' => [
+                'purchase_order' => $po,
+                'items_breakdown' => [
+                    'items' => $po->items ?? [],
+                    'total_items' => count($po->items ?? []),
+                    'total_quantity' => array_sum(array_column($po->items ?? [], 'quantity')),
+                    'subtotal' => $po->total_amount,
+                    'tax_amount' => $po->tax_amount,
+                    'discount_amount' => $po->discount_amount,
+                    'net_amount' => $po->net_amount,
+                ],
+                'calculated_metrics' => [
+                    'days_since_order' => $po->getDaysSinceOrder(),
+                    'is_overdue' => $po->isOverdue(),
+                    'days_overdue' => $po->getDaysOverdue(),
+                    'payment_progress' => $po->getPaymentProgress(),
+                    'urgency_level' => $po->getUrgencyLevel(),
+                ],
+                'payment_suggestions' => $po->getPaymentSuggestions(),
+            ]
+        ]);
     }
 
-    // Verify PO belongs to business
-    if ($po->business_id !== $business->id) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Purchase order not found or access denied'
-        ], 404);
+
+     private function notifyAdminOfPendingPO(PurchaseOrder $purchaseOrder)
+    {
+        try {
+            // Get admin email from system settings or use default
+            $adminEmail = SystemSetting::getValue('admin_notification_email', 'support@foodstuff.store');
+
+            Mail::queue([$adminEmail, 'segunemma2003@gmail.com', 'diana.tenebe@foodstuff.store', 'boma.dokubo@foodstuff.store','operations@foodstuff.store'])->send(new PurchaseOrderCreated($purchaseOrder));
+
+            Log::info('Admin notified of pending purchase order', [
+                'po_id' => $purchaseOrder->id,
+                'po_number' => $purchaseOrder->po_number,
+                'business_id' => $purchaseOrder->business_id,
+                'amount' => $purchaseOrder->net_amount,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to notify admin of pending PO', [
+                'po_id' => $purchaseOrder->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
-    $po->load(['vendor', 'payments.confirmedBy', 'payments.rejectedBy']);
-
-    return response()->json([
-        'success' => true,
-        'message' => 'Purchase order retrieved successfully',
-        'data' => [
-            'purchase_order' => $po,
-            'calculated_metrics' => [
-                'days_since_order' => $po->getDaysSinceOrder(),
-                'is_overdue' => $po->isOverdue(),
-                'days_overdue' => $po->getDaysOverdue(),
-                'payment_progress' => $po->getPaymentProgress(),
-                'urgency_level' => $po->getUrgencyLevel(),
-            ],
-            'payment_suggestions' => $po->getPaymentSuggestions(),
-        ]
-    ]);
-}
-
-/**
- * Download payment receipt
- */
-public function downloadReceipt(Payment $payment)
-{
-    $business = Auth::user();
-
-    // Check authorization
-    if(!$business || !($business instanceof Business) || $payment->business_id !== $business->id) {
-        abort(403, 'Unauthorized access to receipt');
-    }
-
-    if (!$payment->receipt_path || !Storage::disk('s3')->exists($payment->receipt_path)) {
-        abort(404, 'Receipt file not found');
-    }
-
-    return Storage::disk('s3')->download($payment->receipt_path, 'receipt_' . $payment->payment_reference . '.pdf');
-}
 }

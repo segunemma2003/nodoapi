@@ -10,7 +10,10 @@ use App\Models\Payment;
 use App\Models\Vendor;
 use App\Models\SystemSetting;
 use App\Mail\BusinessCredentials;
+use App\Mail\PurchaseOrderApproved;
+use App\Mail\PurchaseOrderRejected;
 use App\Models\BalanceTransaction;
+use App\Services\PaystackService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -27,6 +30,16 @@ use Illuminate\Support\Str;
  */
 class AdminController extends Controller
 {
+
+     protected $paystackService;
+
+    public function __construct(PaystackService $paystackService)
+    {
+        $this->paystackService = $paystackService;
+    }
+
+
+
     /**
      * @OA\Get(
      *     path="/api/admin/dashboard",
@@ -865,54 +878,90 @@ public function getPurchaseOrderDetails(PurchaseOrder $po)
  * )
  */
 public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
-{
-    if ($po->status !== 'pending') {
-        return response()->json([
-            'success' => false,
-            'message' => 'Purchase order is not pending approval'
-        ], 400);
-    }
+    {
+        if ($po->status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order is not pending approval'
+            ], 400);
+        }
 
-    $request->validate([
-        'notes' => 'nullable|string|max:500'
-    ]);
-
-    DB::beginTransaction();
-    try {
-        $admin = Auth::user();
-
-        $po->update([
-            'status' => 'approved',
-            'approved_by' => $admin->id,
-            'approved_at' => now(),
-            'notes' => ($po->notes ?? '') . "\nAdmin notes: " . ($request->notes ?? 'Approved'),
+        $request->validate([
+            'notes' => 'nullable|string|max:500'
         ]);
 
-        DB::commit();
+        DB::beginTransaction();
+        try {
+            $admin = Auth::user();
+            $business = $po->business;
+            $vendor = $po->vendor;
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Purchase order approved successfully',
-            'data' => [
-                'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
-                'approval_details' => [
-                    'approved_by' => $admin->name,
-                    'approved_at' => now(),
-                    'notes' => $request->notes,
+            // Update PO status to approved
+            $po->update([
+                'status' => 'approved',
+                'approved_by' => $admin->id,
+                'approved_at' => now(),
+                'notes' => ($po->notes ?? '') . "\nAdmin notes: " . ($request->notes ?? 'Approved'),
+            ]);
+
+            // Make automatic payment to business via Paystack
+            $paymentResult = $this->makePaymentToBusiness($po, $business);
+
+            if (!$paymentResult['success']) {
+                // If payment fails, revert the approval
+                $po->update([
+                    'status' => 'pending',
+                    'approved_by' => null,
+                    'approved_at' => null,
+                ]);
+
+                DB::rollback();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Purchase order approval failed due to payment error',
+                    'error' => $paymentResult['error']
+                ], 500);
+            }
+
+            DB::commit();
+
+            // Send notifications after successful transaction
+            $this->sendApprovalNotifications($po, $business, $vendor, $paymentResult);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Purchase order approved successfully and payment sent to business',
+                'data' => [
+                    'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
+                    'approval_details' => [
+                        'approved_by' => $admin->name,
+                        'approved_at' => now(),
+                        'notes' => $request->notes,
+                    ],
+                    'payment_details' => [
+                        'amount_paid' => $po->net_amount,
+                        'payment_reference' => $paymentResult['reference'],
+                        'payment_status' => 'completed',
+                        'recipient' => $business->name,
+                    ]
                 ]
-            ]
-        ]);
+            ]);
 
-    } catch (\Exception $e) {
-        DB::rollback();
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to approve purchase order',
-            'error' => $e->getMessage()
-        ], 500);
+        } catch (\Exception $e) {
+            DB::rollback();
+            Log::error('Purchase order approval failed', [
+                'po_id' => $po->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to approve purchase order',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
-}
-
 /**
  * @OA\Post(
  *     path="/api/admin/purchase-orders/{po}/reject",
@@ -923,76 +972,207 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
  * )
  */
 public function rejectPurchaseOrder(Request $request, PurchaseOrder $po)
-{
-    if ($po->status !== 'pending') {
-        return response()->json([
-            'success' => false,
-            'message' => 'Purchase order is not pending approval'
-        ], 400);
-    }
-
-    $request->validate([
-        'reason' => 'required|string|max:500'
-    ]);
-
-    DB::beginTransaction();
-    try {
-        $admin = Auth::user();
-        $business = $po->business;
-
-        // If PO was already reducing spending power, restore it
-        if ($po->status === 'pending') {
-            $business->available_balance += $po->net_amount;
-            $business->credit_balance -= $po->net_amount;
-            $business->credit_limit = $business->available_balance;
-            $business->save();
-
-            // Log the restoration
-            $business->logBalanceTransaction(
-                'available',
-                $po->net_amount,
-                'credit',
-                'Spending power restored due to PO rejection',
-                'po_rejection',
-                $po->id
-            );
+    {
+        if ($po->status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order is not pending approval'
+            ], 400);
         }
 
-        $po->update([
-            'status' => 'rejected',
-            'approved_by' => $admin->id,
-            'approved_at' => now(),
-            'notes' => ($po->notes ?? '') . "\nRejection reason: " . $request->reason,
+        $request->validate([
+            'reason' => 'required|string|max:500'
         ]);
 
-        DB::commit();
+        DB::beginTransaction();
+        try {
+            $admin = Auth::user();
+            $business = $po->business;
+            $vendor = $po->vendor;
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Purchase order rejected successfully',
-            'data' => [
-                'purchase_order' => $po->fresh(['business', 'vendor']),
-                'rejection_details' => [
-                    'rejected_by' => $admin->name,
-                    'rejected_at' => now(),
-                    'reason' => $request->reason,
-                ],
-                'business_balances_restored' => [
-                    'available_spending_power' => $business->fresh()->available_balance,
-                    'outstanding_debt' => $business->fresh()->credit_balance,
+            // If PO was already reducing spending power, restore it
+            if ($po->status === 'pending') {
+                $business->available_balance += $po->net_amount;
+                $business->credit_balance -= $po->net_amount;
+                $business->credit_limit = $business->available_balance;
+                $business->save();
+
+                // Log the restoration
+                $business->logBalanceTransaction(
+                    'available',
+                    $po->net_amount,
+                    'credit',
+                    'Spending power restored due to PO rejection',
+                    'po_rejection',
+                    $po->id
+                );
+            }
+
+            $po->update([
+                'status' => 'rejected',
+                'approved_by' => $admin->id,
+                'approved_at' => now(),
+                'notes' => ($po->notes ?? '') . "\nRejection reason: " . $request->reason,
+            ]);
+
+            DB::commit();
+
+            // Send rejection notification only to vendor
+            $this->sendRejectionNotifications($po, $vendor, $request->reason);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Purchase order rejected successfully',
+                'data' => [
+                    'purchase_order' => $po->fresh(['business', 'vendor']),
+                    'rejection_details' => [
+                        'rejected_by' => $admin->name,
+                        'rejected_at' => now(),
+                        'reason' => $request->reason,
+                    ],
+                    'business_balances_restored' => [
+                        'available_spending_power' => $business->fresh()->available_balance,
+                        'outstanding_debt' => $business->fresh()->credit_balance,
+                    ]
                 ]
-            ]
-        ]);
+            ]);
 
-    } catch (\Exception $e) {
-        DB::rollback();
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to reject purchase order',
-            'error' => $e->getMessage()
-        ], 500);
+        } catch (\Exception $e) {
+            DB::rollback();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to reject purchase order',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
-}
+
+
+    /**
+     * Make payment to business via Paystack
+     */
+    private function makePaymentToBusiness(PurchaseOrder $po, Business $business)
+    {
+        try {
+            // Check if business has bank account details
+            if (!$business->bank_account_number || !$business->bank_code) {
+                return [
+                    'success' => false,
+                    'error' => 'Business bank account details not configured'
+                ];
+            }
+
+            // Create transfer recipient if not exists
+            $recipientData = $this->paystackService->createTransferRecipient([
+                'type' => 'nuban',
+                'name' => $business->name,
+                'account_number' => $business->bank_account_number,
+                'bank_code' => $business->bank_code,
+                'currency' => 'NGN'
+            ]);
+
+            if (!$recipientData['success']) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to create transfer recipient: ' . $recipientData['message']
+                ];
+            }
+
+            // Initiate transfer
+            $transferAmount = $po->net_amount * 100; // Convert to kobo
+            $transferData = $this->paystackService->initiateTransfer([
+                'source' => 'balance',
+                'amount' => $transferAmount,
+                'recipient' => $recipientData['data']['recipient_code'],
+                'reason' => "Payment for PO #{$po->po_number} - {$po->description}",
+                'reference' => 'PO_' . $po->po_number . '_' . time()
+            ]);
+
+            if (!$transferData['success']) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to initiate transfer: ' . $transferData['message']
+                ];
+            }
+
+            // Log the payment
+            Log::info('Automatic payment sent to business', [
+                'po_id' => $po->id,
+                'business_id' => $business->id,
+                'amount' => $po->net_amount,
+                'transfer_reference' => $transferData['data']['reference'],
+                'transfer_code' => $transferData['data']['transfer_code']
+            ]);
+
+            return [
+                'success' => true,
+                'reference' => $transferData['data']['reference'],
+                'transfer_code' => $transferData['data']['transfer_code'],
+                'amount' => $po->net_amount
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Paystack payment failed', [
+                'po_id' => $po->id,
+                'business_id' => $business->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'error' => 'Payment service error: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Send approval notifications to business and vendor
+     */
+    private function sendApprovalNotifications(PurchaseOrder $po, Business $business, $vendor, $paymentResult)
+    {
+        try {
+            // Notify business about approval and payment
+            Mail::to($business->email)->send(new PurchaseOrderApproved($po, $paymentResult));
+
+            // Notify vendor about approval
+            Mail::to($vendor->email)->send(new PurchaseOrderApproved($po, $paymentResult, 'vendor'));
+
+            Log::info('Approval notifications sent', [
+                'po_id' => $po->id,
+                'business_email' => $business->email,
+                'vendor_email' => $vendor->email,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to send approval notifications', [
+                'po_id' => $po->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Send rejection notification to vendor only
+     */
+    private function sendRejectionNotifications(PurchaseOrder $po, $vendor, $reason)
+    {
+        try {
+            // Only notify vendor about rejection
+            Mail::to($vendor->email)->send(new PurchaseOrderRejected($po, $reason));
+
+            Log::info('Rejection notification sent to vendor', [
+                'po_id' => $po->id,
+                'vendor_email' => $vendor->email,
+                'reason' => $reason,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to send rejection notification', [
+                'po_id' => $po->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
 
 /**
  * @OA\Put(

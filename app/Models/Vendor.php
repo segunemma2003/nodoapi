@@ -19,6 +19,10 @@ class Vendor extends Model
         'payment_terms',
         'is_active',
         'business_id',
+         'account_number',    // NEW
+    'bank_code',         // NEW
+    'bank_name',         // NEW
+    'recipient_code',
     ];
 
     protected function casts(): array

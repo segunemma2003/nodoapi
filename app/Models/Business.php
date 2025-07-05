@@ -31,6 +31,7 @@ class Business extends Authenticatable
         'custom_interest_rate',
         'custom_interest_frequency',
         'last_interest_applied_at',
+
     ];
 
     protected $hidden = [
