@@ -878,90 +878,492 @@ public function getPurchaseOrderDetails(PurchaseOrder $po)
  * )
  */
 public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
-    {
-        if ($po->status !== 'pending') {
+{
+    if ($po->status !== 'pending') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Purchase order is not pending approval'
+        ], 400);
+    }
+
+    $request->validate([
+        'notes' => 'nullable|string|max:500'
+    ]);
+
+    DB::beginTransaction();
+    try {
+        $admin = Auth::user();
+        $business = $po->business;
+        $vendor = $po->vendor;
+
+        // Check if vendor has bank account details
+        if (!$vendor->account_number || !$vendor->bank_code) {
+            DB::rollback();
             return response()->json([
                 'success' => false,
-                'message' => 'Purchase order is not pending approval'
+                'message' => 'Vendor bank account details not configured. Please update vendor information.'
             ], 400);
         }
 
-        $request->validate([
-            'notes' => 'nullable|string|max:500'
+        // Update PO status to approved
+        $po->update([
+            'status' => 'approved',
+            'approved_by' => $admin->id,
+            'approved_at' => now(),
+            'notes' => ($po->notes ?? '') . "\nAdmin notes: " . ($request->notes ?? 'Approved'),
         ]);
 
-        DB::beginTransaction();
-        try {
-            $admin = Auth::user();
-            $business = $po->business;
-            $vendor = $po->vendor;
+        // Make automatic payment to VENDOR (not business)
+        $paymentResult = $this->makePaymentToVendor($po, $vendor);
 
-            // Update PO status to approved
+        if (!$paymentResult['success']) {
+            // If payment fails, revert the approval
             $po->update([
-                'status' => 'approved',
-                'approved_by' => $admin->id,
-                'approved_at' => now(),
-                'notes' => ($po->notes ?? '') . "\nAdmin notes: " . ($request->notes ?? 'Approved'),
+                'status' => 'pending',
+                'approved_by' => null,
+                'approved_at' => null,
             ]);
 
-            // Make automatic payment to business via Paystack
-            $paymentResult = $this->makePaymentToBusiness($po, $business);
-
-            if (!$paymentResult['success']) {
-                // If payment fails, revert the approval
-                $po->update([
-                    'status' => 'pending',
-                    'approved_by' => null,
-                    'approved_at' => null,
-                ]);
-
-                DB::rollback();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Purchase order approval failed due to payment error',
-                    'error' => $paymentResult['error']
-                ], 500);
-            }
-
-            DB::commit();
-
-            // Send notifications after successful transaction
-            $this->sendApprovalNotifications($po, $business, $vendor, $paymentResult);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Purchase order approved successfully and payment sent to business',
-                'data' => [
-                    'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
-                    'approval_details' => [
-                        'approved_by' => $admin->name,
-                        'approved_at' => now(),
-                        'notes' => $request->notes,
-                    ],
-                    'payment_details' => [
-                        'amount_paid' => $po->net_amount,
-                        'payment_reference' => $paymentResult['reference'],
-                        'payment_status' => 'completed',
-                        'recipient' => $business->name,
-                    ]
-                ]
-            ]);
-
-        } catch (\Exception $e) {
             DB::rollback();
-            Log::error('Purchase order approval failed', [
-                'po_id' => $po->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to approve purchase order',
-                'error' => $e->getMessage()
+                'message' => 'Purchase order approval failed due to payment error',
+                'error' => $paymentResult['error']
             ], 500);
         }
+
+        // Generate PDFs
+        $pdfResults = $this->generatePurchaseOrderPDFs($po, $paymentResult);
+
+        DB::commit();
+
+        // Send notifications after successful transaction
+        $this->sendApprovalNotifications($po, $business, $vendor, $paymentResult, $pdfResults);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Purchase order approved successfully and payment sent to vendor',
+            'data' => [
+                'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
+                'approval_details' => [
+                    'approved_by' => $admin->name,
+                    'approved_at' => now(),
+                    'notes' => $request->notes,
+                ],
+                'payment_details' => [
+                    'amount_paid' => $po->net_amount,
+                    'payment_reference' => $paymentResult['reference'],
+                    'payment_status' => 'completed',
+                    'recipient' => $vendor->name,
+                    'recipient_account' => $vendor->account_number,
+                ],
+                'documents' => [
+                    'purchase_order_pdf' => $pdfResults['po_pdf_path'] ?? null,
+                    'payment_receipt_pdf' => $pdfResults['receipt_pdf_path'] ?? null,
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        Log::error('Purchase order approval failed', [
+            'po_id' => $po->id,
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to approve purchase order',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
+
+private function makePaymentToVendor(PurchaseOrder $po, $vendor)
+{
+    try {
+        // Create transfer recipient for vendor if not exists
+        $recipientData = $this->paystackService->createTransferRecipient([
+            'type' => 'nuban',
+            'name' => $vendor->name,
+            'account_number' => $vendor->account_number,
+            'bank_code' => $vendor->bank_code,
+            'currency' => 'NGN'
+        ]);
+
+        if (!$recipientData['success']) {
+            return [
+                'success' => false,
+                'error' => 'Failed to create transfer recipient: ' . $recipientData['message']
+            ];
+        }
+
+        // Store recipient code for future use
+        if (!$vendor->recipient_code) {
+            $vendor->update(['recipient_code' => $recipientData['data']['recipient_code']]);
+        }
+
+        // Initiate transfer to vendor
+        $transferAmount = $po->net_amount * 100; // Convert to kobo
+        $transferData = $this->paystackService->initiateTransfer([
+            'source' => 'balance',
+            'amount' => $transferAmount,
+            'recipient' => $recipientData['data']['recipient_code'],
+            'reason' => "Payment for PO #{$po->po_number} - {$po->description}",
+            'reference' => 'PO_VENDOR_' . $po->po_number . '_' . time()
+        ]);
+
+        if (!$transferData['success']) {
+            return [
+                'success' => false,
+                'error' => 'Failed to initiate transfer: ' . $transferData['message']
+            ];
+        }
+
+        // Log the payment
+        Log::info('Payment sent to vendor', [
+            'po_id' => $po->id,
+            'vendor_id' => $vendor->id,
+            'vendor_name' => $vendor->name,
+            'amount' => $po->net_amount,
+            'transfer_reference' => $transferData['data']['reference'],
+            'transfer_code' => $transferData['data']['transfer_code']
+        ]);
+
+        return [
+            'success' => true,
+            'reference' => $transferData['data']['reference'],
+            'transfer_code' => $transferData['data']['transfer_code'],
+            'amount' => $po->net_amount,
+            'recipient_code' => $recipientData['data']['recipient_code']
+        ];
+
+    } catch (\Exception $e) {
+        Log::error('Paystack vendor payment failed', [
+            'po_id' => $po->id,
+            'vendor_id' => $vendor->id,
+            'error' => $e->getMessage()
+        ]);
+
+        return [
+            'success' => false,
+            'error' => 'Payment service error: ' . $e->getMessage()
+        ];
+    }
+}
+
+
+private function generatePurchaseOrderPDFs(PurchaseOrder $po, $paymentResult)
+{
+    try {
+        $results = [];
+
+        // Create directories if they don't exist
+        $poDir = storage_path('app/private/purchase_orders');
+        $receiptDir = storage_path('app/private/payment_receipts');
+
+        if (!file_exists($poDir)) {
+            mkdir($poDir, 0755, true);
+        }
+        if (!file_exists($receiptDir)) {
+            mkdir($receiptDir, 0755, true);
+        }
+
+        // Generate Purchase Order PDF
+        $poPdfPath = $poDir . '/po_' . $po->id . '.pdf';
+        $poHtml = $this->generatePurchaseOrderHTML($po);
+        $this->generatePDFFromHTML($poHtml, $poPdfPath);
+        $results['po_pdf_path'] = $poPdfPath;
+
+        // Generate Payment Receipt PDF
+        $receiptPdfPath = $receiptDir . '/payment_' . $paymentResult['transfer_code'] . '.pdf';
+        $receiptHtml = $this->generatePaymentReceiptHTML($po, $paymentResult);
+        $this->generatePDFFromHTML($receiptHtml, $receiptPdfPath);
+        $results['receipt_pdf_path'] = $receiptPdfPath;
+
+        Log::info('PDFs generated successfully', [
+            'po_id' => $po->id,
+            'po_pdf' => $poPdfPath,
+            'receipt_pdf' => $receiptPdfPath
+        ]);
+
+        return $results;
+
+    } catch (\Exception $e) {
+        Log::error('PDF generation failed', [
+            'po_id' => $po->id,
+            'error' => $e->getMessage()
+        ]);
+
+        return [
+            'po_pdf_path' => null,
+            'receipt_pdf_path' => null,
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+/**
+ * Generate Purchase Order HTML for PDF
+ */
+private function generatePurchaseOrderHTML(PurchaseOrder $po)
+{
+    $business = $po->business;
+    $vendor = $po->vendor;
+    $items = $po->items ?? [];
+
+    return "
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset='utf-8'>
+        <title>Purchase Order #{$po->po_number}</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .header { text-align: center; margin-bottom: 30px; }
+            .company-info { margin-bottom: 20px; }
+            .po-details { display: table; width: 100%; margin-bottom: 20px; }
+            .po-left, .po-right { display: table-cell; width: 50%; vertical-align: top; }
+            .items-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+            .items-table th, .items-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            .items-table th { background-color: #f2f2f2; }
+            .totals { text-align: right; margin-top: 20px; }
+            .total-row { margin: 5px 0; }
+            .final-total { font-weight: bold; font-size: 18px; }
+        </style>
+    </head>
+    <body>
+        <div class='header'>
+            <h1>PURCHASE ORDER</h1>
+            <h2>#{$po->po_number}</h2>
+        </div>
+
+        <div class='po-details'>
+            <div class='po-left'>
+                <h3>From:</h3>
+                <div class='company-info'>
+                    <strong>{$business->name}</strong><br>
+                    {$business->email}<br>
+                    " . ($business->phone ? $business->phone . '<br>' : '') . "
+                    " . ($business->address ? nl2br($business->address) : '') . "
+                </div>
+            </div>
+            <div class='po-right'>
+                <h3>To:</h3>
+                <div class='company-info'>
+                    <strong>{$vendor->name}</strong><br>
+                    {$vendor->email}<br>
+                    " . ($vendor->phone ? $vendor->phone . '<br>' : '') . "
+                    " . ($vendor->address ? nl2br($vendor->address) : '') . "
+                </div>
+            </div>
+        </div>
+
+        <div class='po-details'>
+            <div class='po-left'>
+                <strong>Order Date:</strong> {$po->order_date->format('F j, Y')}<br>
+                <strong>Due Date:</strong> {$po->due_date->format('F j, Y')}<br>
+                " . ($po->expected_delivery_date ? "<strong>Expected Delivery:</strong> {$po->expected_delivery_date->format('F j, Y')}<br>" : '') . "
+            </div>
+            <div class='po-right'>
+                <strong>PO Number:</strong> {$po->po_number}<br>
+                <strong>Status:</strong> " . ucfirst($po->status) . "<br>
+                <strong>Approved Date:</strong> {$po->approved_at->format('F j, Y g:i A')}
+            </div>
+        </div>
+
+        " . ($po->description ? "<div><strong>Description:</strong> {$po->description}</div>" : '') . "
+
+        <table class='items-table'>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Description</th>
+                    <th>Quantity</th>
+                    <th>Unit Price</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>";
+
+    foreach ($items as $item) {
+        $itemTotal = $item['quantity'] * $item['unit_price'];
+        $html .= "
+                <tr>
+                    <td>{$item['name']}</td>
+                    <td>" . ($item['description'] ?? 'N/A') . "</td>
+                    <td>" . number_format($item['quantity'], 2) . "</td>
+                    <td>₦" . number_format($item['unit_price'], 2) . "</td>
+                    <td>₦" . number_format($itemTotal, 2) . "</td>
+                </tr>";
+    }
+
+    $html .= "
+            </tbody>
+        </table>
+
+        <div class='totals'>
+            <div class='total-row'>Subtotal: ₦" . number_format($po->total_amount, 2) . "</div>";
+
+    if ($po->tax_amount > 0) {
+        $html .= "<div class='total-row'>Tax: ₦" . number_format($po->tax_amount, 2) . "</div>";
+    }
+    if ($po->discount_amount > 0) {
+        $html .= "<div class='total-row'>Discount: -₦" . number_format($po->discount_amount, 2) . "</div>";
+    }
+
+    $html .= "
+            <div class='total-row final-total'>Total: ₦" . number_format($po->net_amount, 2) . "</div>
+        </div>
+
+        " . ($po->notes ? "<div style='margin-top: 30px;'><strong>Notes:</strong><br>" . nl2br($po->notes) . "</div>" : '') . "
+
+        <div style='margin-top: 40px; text-align: center; color: #666;'>
+            <p>This purchase order was approved on {$po->approved_at->format('F j, Y')} and payment has been processed.</p>
+        </div>
+    </body>
+    </html>";
+
+    return $html;
+}
+
+/**
+ * Generate Payment Receipt HTML for PDF
+ */
+private function generatePaymentReceiptHTML(PurchaseOrder $po, $paymentResult)
+{
+    $vendor = $po->vendor;
+    $business = $po->business;
+
+    return "
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset='utf-8'>
+        <title>Payment Receipt - {$paymentResult['reference']}</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .header { text-align: center; margin-bottom: 30px; }
+            .receipt-info { margin: 20px 0; }
+            .info-table { width: 100%; border-collapse: collapse; }
+            .info-table td { padding: 10px; border-bottom: 1px solid #eee; }
+            .label { font-weight: bold; width: 200px; }
+            .amount { font-size: 24px; font-weight: bold; color: #28a745; }
+            .footer { margin-top: 40px; text-align: center; color: #666; }
+        </style>
+    </head>
+    <body>
+        <div class='header'>
+            <h1>PAYMENT RECEIPT</h1>
+            <h2>#{$paymentResult['reference']}</h2>
+        </div>
+
+        <div class='receipt-info'>
+            <table class='info-table'>
+                <tr>
+                    <td class='label'>Payment Date:</td>
+                    <td>" . now()->format('F j, Y g:i A') . "</td>
+                </tr>
+                <tr>
+                    <td class='label'>Payment Reference:</td>
+                    <td>{$paymentResult['reference']}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Transfer Code:</td>
+                    <td>{$paymentResult['transfer_code']}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Purchase Order:</td>
+                    <td>#{$po->po_number}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Amount Paid:</td>
+                    <td class='amount'>₦" . number_format($paymentResult['amount'], 2) . "</td>
+                </tr>
+                <tr>
+                    <td class='label'>Payment Method:</td>
+                    <td>Bank Transfer (Paystack)</td>
+                </tr>
+                <tr>
+                    <td class='label'>Currency:</td>
+                    <td>Nigerian Naira (NGN)</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class='receipt-info'>
+            <h3>Recipient Details</h3>
+            <table class='info-table'>
+                <tr>
+                    <td class='label'>Vendor Name:</td>
+                    <td>{$vendor->name}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Account Number:</td>
+                    <td>{$vendor->account_number}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Bank:</td>
+                    <td>{$vendor->bank_name}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Recipient Code:</td>
+                    <td>{$paymentResult['recipient_code']}</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class='receipt-info'>
+            <h3>Transaction Details</h3>
+            <table class='info-table'>
+                <tr>
+                    <td class='label'>Paying Business:</td>
+                    <td>{$business->name}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Business Email:</td>
+                    <td>{$business->email}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Description:</td>
+                    <td>Payment for Purchase Order #{$po->po_number} - {$po->description}</td>
+                </tr>
+                <tr>
+                    <td class='label'>Status:</td>
+                    <td style='color: #28a745; font-weight: bold;'>COMPLETED</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class='footer'>
+            <p>This is an automated receipt generated upon successful payment processing.</p>
+            <p>For any inquiries, please contact support at " . config('mail.from.address') . "</p>
+        </div>
+    </body>
+    </html>";
+}
+
+/**
+ * Generate PDF from HTML using DomPDF (you'll need to install this)
+ * Run: composer require dompdf/dompdf
+ */
+private function generatePDFFromHTML($html, $filePath)
+{
+    // Using simple file-based PDF generation for now
+    // You can install DomPDF later for better PDF generation
+
+    // For now, save as HTML (you can convert to PDF later)
+    $htmlPath = str_replace('.pdf', '.html', $filePath);
+    file_put_contents($htmlPath, $html);
+
+    // Create a simple text-based receipt for now
+    $textContent = strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $html));
+    file_put_contents($filePath, $textContent);
+
+    return true;
+}
+
 /**
  * @OA\Post(
  *     path="/api/admin/purchase-orders/{po}/reject",
@@ -1128,29 +1530,29 @@ public function rejectPurchaseOrder(Request $request, PurchaseOrder $po)
     /**
      * Send approval notifications to business and vendor
      */
-    private function sendApprovalNotifications(PurchaseOrder $po, Business $business, $vendor, $paymentResult)
-    {
-        try {
-            // Notify business about approval and payment
-            Mail::to($business->email)->send(new PurchaseOrderApproved($po, $paymentResult));
+   private function sendApprovalNotifications(PurchaseOrder $po, Business $business, $vendor, $paymentResult, $pdfResults = [])
+{
+    try {
+        // Notify business about approval (but vendor got paid, not business)
+        Mail::to($business->email)->send(new PurchaseOrderApproved($po, $paymentResult, 'business'));
 
-            // Notify vendor about approval
-            Mail::to($vendor->email)->send(new PurchaseOrderApproved($po, $paymentResult, 'vendor'));
+        // Notify vendor about approval and payment received
+        Mail::to($vendor->email)->send(new PurchaseOrderApproved($po, $paymentResult, 'vendor'));
 
-            Log::info('Approval notifications sent', [
-                'po_id' => $po->id,
-                'business_email' => $business->email,
-                'vendor_email' => $vendor->email,
-            ]);
+        Log::info('Approval notifications sent', [
+            'po_id' => $po->id,
+            'business_email' => $business->email,
+            'vendor_email' => $vendor->email,
+            'payment_amount' => $paymentResult['amount'],
+        ]);
 
-        } catch (\Exception $e) {
-            Log::error('Failed to send approval notifications', [
-                'po_id' => $po->id,
-                'error' => $e->getMessage(),
-            ]);
-        }
+    } catch (\Exception $e) {
+        Log::error('Failed to send approval notifications', [
+            'po_id' => $po->id,
+            'error' => $e->getMessage(),
+        ]);
     }
-
+}
     /**
      * Send rejection notification to vendor only
      */

@@ -1,9 +1,9 @@
 @component('mail::message')
-# New Purchase Order Pending Approval
+# New Purchase Order Pending Approval ⏳
 
 Hello Admin,
 
-A new purchase order has been submitted and requires your approval.
+A new purchase order has been submitted and requires your approval for payment processing.
 
 ## Purchase Order Details
 
@@ -23,7 +23,7 @@ A new purchase order has been submitted and requires your approval.
 | Item | Description | Quantity | Unit Price | Total |
 |:-----|:------------|:---------|:-----------|:------|
 @foreach($items as $item)
-| {{ $item['name'] }} | {{ $item['description'] ?? 'N/A' }} | {{ $item['quantity'] }} | ₦{{ number_format($item['unit_price'], 2) }} | ₦{{ number_format($item['total_price'], 2) }} |
+| {{ $item['name'] }} | {{ $item['description'] ?? 'N/A' }} | {{ $item['quantity'] }} | ₦{{ number_format($item['unit_price'], 2) }} | ₦{{ number_format($item['line_total'], 2) }} |
 @endforeach
 @endcomponent
 @endif
@@ -42,14 +42,27 @@ A new purchase order has been submitted and requires your approval.
 **Email:** {{ $business->email }}
 **Phone:** {{ $business->phone ?? 'N/A' }}
 **Business Type:** {{ $business->business_type }}
+**Available Credit:** ₦{{ number_format($business->available_balance, 2) }}
+**Credit Utilization:** {{ $business->getCreditUtilization() }}%
+
+## Vendor Payment Details
+
+**Vendor:** {{ $vendor->name }}
+**Account Number:** {{ $vendor->account_number ?? 'Not provided' }}
+**Bank:** {{ $vendor->bank_name ?? 'Not provided' }}
+
+@if(!$vendor->account_number || !$vendor->bank_code)
+@component('mail::panel')
+⚠️ **WARNING:** Vendor bank details are incomplete. Please update vendor information before approving.
+@endcomponent
+@endif
 
 @component('mail::button', ['url' => $adminUrl])
 Review & Approve Purchase Order
 @endcomponent
 
-**Note:** Upon approval, payment will be automatically sent to the business account.
+**Important:** Upon approval, payment will be automatically sent to the vendor's account. Please verify vendor bank details are correct before approving.
 
 Thanks,<br>
 {{ config('app.name') }}
 @endcomponent
-
