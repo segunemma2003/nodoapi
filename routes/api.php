@@ -46,6 +46,14 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('businesses/{business}', [AdminController::class, 'getBusinessDetails']);
     Route::post('businesses/{business}/adjust-credit', [AdminController::class, 'adjustAssignedCredit']);
 
+    // VENDOR MANAGEMENT
+    Route::prefix('vendors')->group(function () {
+        Route::get('/', [AdminController::class, 'getVendors']);
+        Route::get('{vendor}', [AdminController::class, 'getVendorDetails']);
+        Route::post('{vendor}/approve', [AdminController::class, 'approveVendor']);
+        Route::post('{vendor}/reject', [AdminController::class, 'rejectVendor']);
+    });
+
     // PURCHASE ORDERS MANAGEMENT
     Route::prefix('purchase-orders')->group(function () {
         Route::get('/', [AdminController::class, 'getPurchaseOrders']);

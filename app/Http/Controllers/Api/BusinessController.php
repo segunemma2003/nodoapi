@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Mail\PurchaseOrderCreated;
+use App\Mail\VendorCreated;
 use App\Models\Business;
 use App\Models\Payment;
 use App\Models\Vendor;
@@ -156,11 +157,16 @@ class BusinessController extends Controller
         'bank_name' => $request->bank_name,
         // Store verified account holder name
         'account_holder_name' => $accountVerification['data']['account_name'] ?? null,
+        // Approval status - starts as pending
+        'status' => 'pending',
     ]);
+
+    // Notify admin of new vendor
+    $this->notifyAdminOfNewVendor($vendor);
 
     return response()->json([
         'success' => true,
-        'message' => 'Vendor created successfully with verified bank account',
+        'message' => 'Vendor created successfully and sent for admin approval',
         'data' => $vendor
     ], 201);
 }
@@ -209,8 +215,21 @@ class BusinessController extends Controller
         'tax_percentage' => 'nullable|numeric|min:0|max:100',
         'discount_amount' => 'nullable|numeric|min:0',
     ]);
-        // Verify vendor belongs to business
+        // Verify vendor belongs to business and is approved
         $vendor = $business->vendors()->findOrFail($request->vendor_id);
+
+        // Check if vendor is approved
+        if (!$vendor->isApproved()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot create purchase order for unapproved vendor',
+                'errors' => [
+                    'vendor_status' => $vendor->status,
+                    'vendor_id' => $vendor->id,
+                    'vendor_name' => $vendor->name,
+                ]
+            ], 400);
+        }
 
         $status = $request->status ?? 'pending';
 
@@ -757,13 +776,35 @@ class BusinessController extends Controller
 
         $vendors = $business->vendors()
             ->withCount('purchaseOrders')
+            ->with(['approvedBy', 'rejectedBy'])
             ->orderBy('created_at', 'desc')
             ->get();
 
         return response()->json([
             'success' => true,
             'message' => 'Vendors retrieved successfully',
-            'data' => $vendors
+            'data' => $vendors->map(function ($vendor) {
+                return [
+                    'id' => $vendor->id,
+                    'name' => $vendor->name,
+                    'email' => $vendor->email,
+                    'phone' => $vendor->phone,
+                    'address' => $vendor->address,
+                    'vendor_code' => $vendor->vendor_code,
+                    'category' => $vendor->category,
+                    'payment_terms' => $vendor->payment_terms,
+                    'is_active' => $vendor->is_active,
+                    'status' => $vendor->status,
+                    'account_number' => $vendor->account_number,
+                    'bank_code' => $vendor->bank_code,
+                    'bank_name' => $vendor->bank_name,
+                    'account_holder_name' => $vendor->account_holder_name,
+                    'purchase_orders_count' => $vendor->purchase_orders_count,
+                    'created_at' => $vendor->created_at,
+                    'updated_at' => $vendor->updated_at,
+                    'approval_info' => $vendor->getApprovalInfo(),
+                ];
+            })
         ]);
     }
 
@@ -1467,6 +1508,28 @@ public function uploadLogo(Request $request)
         } catch (\Exception $e) {
             Log::error('Failed to notify admin of pending PO', [
                 'po_id' => $purchaseOrder->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function notifyAdminOfNewVendor(Vendor $vendor)
+    {
+        try {
+            // Get admin email from system settings or use default
+            $adminEmail = SystemSetting::getValue('admin_notification_email', 'support@foodstuff.store');
+
+            Mail::queue([$adminEmail, 'segunemma2003@gmail.com', 'diana.tenebe@foodstuff.store', 'boma.dokubo@foodstuff.store','operations@foodstuff.store'])->send(new VendorCreated($vendor));
+
+            Log::info('Admin notified of new vendor', [
+                'vendor_id' => $vendor->id,
+                'vendor_name' => $vendor->name,
+                'business_id' => $vendor->business_id,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to notify admin of new vendor', [
+                'vendor_id' => $vendor->id,
                 'error' => $e->getMessage(),
             ]);
         }

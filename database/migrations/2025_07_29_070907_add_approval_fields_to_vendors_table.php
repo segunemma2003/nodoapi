@@ -12,22 +12,22 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('vendors', function (Blueprint $table) {
-             $table->string('account_number', 10)->nullable()->after('payment_terms');
-            $table->string('bank_code', 3)->nullable()->after('account_number');
-            $table->string('bank_name')->nullable()->after('bank_code');
-            $table->string('account_holder_name')->nullable()->after('bank_name');
-            $table->string('recipient_code')->nullable()->after('account_holder_name');
-
-            // Add approval-related fields
+            // Add approval status field
             $table->enum('status', ['pending', 'approved', 'rejected'])->default('pending')->after('is_active');
+
+            // Add approval tracking fields
             $table->foreignId('approved_by')->nullable()->constrained('users')->after('status');
             $table->timestamp('approved_at')->nullable()->after('approved_by');
-            $table->text('rejection_reason')->nullable()->after('approved_at');
 
-            // Add index for faster lookups
-            $table->index(['account_number', 'bank_code']);
+            // Add rejection tracking
+            $table->foreignId('rejected_by')->nullable()->constrained('users')->after('approved_at');
+            $table->timestamp('rejected_at')->nullable()->after('rejected_by');
+            $table->text('rejection_reason')->nullable()->after('rejected_at');
+
+            // Add indexes for performance
             $table->index(['status', 'business_id']);
             $table->index(['approved_by', 'approved_at']);
+            $table->index(['rejected_by', 'rejected_at']);
         });
     }
 
@@ -37,15 +37,17 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('vendors', function (Blueprint $table) {
-           $table->dropColumn([
-                'account_number',
-                'bank_code',
-                'bank_name',
-                'account_holder_name',
-                'recipient_code',
+            $table->dropForeign(['approved_by']);
+            $table->dropForeign(['rejected_by']);
+            $table->dropIndex(['status', 'business_id']);
+            $table->dropIndex(['approved_by', 'approved_at']);
+            $table->dropIndex(['rejected_by', 'rejected_at']);
+            $table->dropColumn([
                 'status',
                 'approved_by',
                 'approved_at',
+                'rejected_by',
+                'rejected_at',
                 'rejection_reason'
             ]);
         });

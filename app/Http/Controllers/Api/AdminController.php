@@ -12,6 +12,8 @@ use App\Models\SystemSetting;
 use App\Mail\BusinessCredentials;
 use App\Mail\PurchaseOrderApproved;
 use App\Mail\PurchaseOrderRejected;
+use App\Mail\VendorApproved;
+use App\Mail\VendorRejected;
 use App\Models\BalanceTransaction;
 use App\Services\PaystackService;
 use Illuminate\Http\Request;
@@ -2441,6 +2443,208 @@ public function getBusinessesEnhanced(Request $request)
                 ->selectRaw('AVG((credit_balance / current_balance) * 100) as avg_util')
                 ->value('avg_util') ?? 0,
             'high_risk_businesses' => Business::whereRaw('(credit_balance / current_balance) > 0.8')->count(),
+        ]
+    ]);
+}
+
+/**
+ * Get all vendors for admin review
+ */
+public function getVendors(Request $request)
+{
+    $query = Vendor::with(['business', 'approvedBy', 'rejectedBy']);
+
+    // Filters
+    if ($request->filled('status')) {
+        $query->where('status', $request->status);
+    }
+    if ($request->filled('business_id')) {
+        $query->where('business_id', $request->business_id);
+    }
+    if ($request->filled('category')) {
+        $query->where('category', 'like', '%' . $request->category . '%');
+    }
+
+    $vendors = $query->orderBy('created_at', 'desc')->paginate(20);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Vendors retrieved successfully',
+        'data' => $vendors,
+        'summary' => [
+            'total_vendors' => Vendor::count(),
+            'pending_vendors' => Vendor::pending()->count(),
+            'approved_vendors' => Vendor::approved()->count(),
+            'rejected_vendors' => Vendor::rejected()->count(),
+        ]
+    ]);
+}
+
+/**
+ * Approve a vendor
+ */
+public function approveVendor(Request $request, Vendor $vendor)
+{
+    if (!$vendor->canBeApproved()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Vendor cannot be approved. Current status: ' . $vendor->status
+        ], 400);
+    }
+
+    $request->validate([
+        'notes' => 'nullable|string|max:500'
+    ]);
+
+    DB::beginTransaction();
+    try {
+        $admin = Auth::user();
+
+        $vendor->update([
+            'status' => 'approved',
+            'approved_by' => $admin->id,
+            'approved_at' => now(),
+            'rejected_by' => null,
+            'rejected_at' => null,
+            'rejection_reason' => null,
+        ]);
+
+        DB::commit();
+
+        // Send notification to business
+        try {
+            Mail::to($vendor->business->email)->send(new VendorApproved($vendor, [
+                'approved_by' => $admin->name,
+                'approved_at' => now()->format('F j, Y g:i A'),
+                'notes' => $request->notes,
+            ]));
+
+            Log::info('Vendor approval notification sent', [
+                'vendor_id' => $vendor->id,
+                'business_email' => $vendor->business->email,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to send vendor approval notification', [
+                'vendor_id' => $vendor->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Vendor approved successfully',
+            'data' => [
+                'vendor' => $vendor->fresh(['business', 'approvedBy']),
+                'approval_details' => [
+                    'approved_by' => $admin->name,
+                    'approved_at' => now(),
+                    'notes' => $request->notes,
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to approve vendor',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Reject a vendor
+ */
+public function rejectVendor(Request $request, Vendor $vendor)
+{
+    if (!$vendor->canBeRejected()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Vendor cannot be rejected. Current status: ' . $vendor->status
+        ], 400);
+    }
+
+    $request->validate([
+        'rejection_reason' => 'required|string|max:1000'
+    ]);
+
+    DB::beginTransaction();
+    try {
+        $admin = Auth::user();
+
+        $vendor->update([
+            'status' => 'rejected',
+            'rejected_by' => $admin->id,
+            'rejected_at' => now(),
+            'rejection_reason' => $request->rejection_reason,
+            'approved_by' => null,
+            'approved_at' => null,
+        ]);
+
+        DB::commit();
+
+        // Send notification to business
+        try {
+            Mail::to($vendor->business->email)->send(new VendorRejected($vendor, [
+                'rejected_by' => $admin->name,
+                'rejected_at' => now()->format('F j, Y g:i A'),
+                'rejection_reason' => $request->rejection_reason,
+            ]));
+
+            Log::info('Vendor rejection notification sent', [
+                'vendor_id' => $vendor->id,
+                'business_email' => $vendor->business->email,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to send vendor rejection notification', [
+                'vendor_id' => $vendor->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Vendor rejected successfully',
+            'data' => [
+                'vendor' => $vendor->fresh(['business', 'rejectedBy']),
+                'rejection_details' => [
+                    'rejected_by' => $admin->name,
+                    'rejected_at' => now(),
+                    'rejection_reason' => $request->rejection_reason,
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to reject vendor',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Get vendor details for admin
+ */
+public function getVendorDetails(Vendor $vendor)
+{
+    $vendor->load(['business', 'approvedBy', 'rejectedBy', 'purchaseOrders']);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Vendor details retrieved successfully',
+        'data' => [
+            'vendor' => $vendor,
+            'approval_info' => $vendor->getApprovalInfo(),
+            'purchase_orders_summary' => [
+                'total_orders' => $vendor->purchaseOrders()->count(),
+                'total_amount' => $vendor->purchaseOrders()->sum('net_amount'),
+                'pending_orders' => $vendor->purchaseOrders()->where('status', 'pending')->count(),
+                'approved_orders' => $vendor->purchaseOrders()->where('status', 'approved')->count(),
+            ]
         ]
     ]);
 }
