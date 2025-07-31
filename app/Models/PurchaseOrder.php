@@ -52,7 +52,7 @@ class PurchaseOrder extends Model
         ];
     }
 
-    // Relationships
+        // Relationships
     public function business()
     {
         return $this->belongsTo(Business::class);

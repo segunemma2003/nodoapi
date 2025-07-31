@@ -883,6 +883,14 @@ public function getPurchaseOrderDetails(PurchaseOrder $po)
  */
 public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
 {
+    // Debug logging
+    Log::info('Approving Purchase Order', [
+        'po_id' => $po->id,
+        'po_number' => $po->po_number,
+        'status' => $po->status,
+        'admin_id' => Auth::id()
+    ]);
+
     if ($po->status !== 'pending') {
         return response()->json([
             'success' => false,
