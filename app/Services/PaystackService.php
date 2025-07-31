@@ -224,14 +224,36 @@ class PaystackService
     public function verifyAccountNumber($accountNumber, $bankCode)
     {
         try {
+            // Debug: Log the secret key (first 10 characters only for security)
+            Log::info('PaystackService verifyAccountNumber', [
+                'secret_key_preview' => substr($this->secretKey, 0, 10) . '...',
+                'secret_key_length' => strlen($this->secretKey),
+                'account_number' => $accountNumber,
+                'bank_code' => $bankCode
+            ]);
+
+            if (empty($this->secretKey)) {
+                return [
+                    'success' => false,
+                    'message' => 'Paystack secret key is not configured'
+                ];
+            }
+
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $this->secretKey,
+                'Content-Type' => 'application/json',
             ])->get($this->baseUrl . '/bank/resolve', [
                 'account_number' => $accountNumber,
                 'bank_code' => $bankCode
             ]);
 
             $responseData = $response->json();
+
+            // Debug: Log the response
+            Log::info('Paystack API Response', [
+                'status_code' => $response->status(),
+                'response' => $responseData
+            ]);
 
             if ($response->successful() && $responseData['status']) {
                 return [

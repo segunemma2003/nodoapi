@@ -234,6 +234,16 @@ Route::prefix('banks')->group(function () {
         return $paystackService->listBanks();
     });
 
+    Route::get('test-config', function () {
+        $secretKey = config('services.paystack.secret_key');
+        return response()->json([
+            'secret_key_configured' => !empty($secretKey),
+            'secret_key_length' => strlen($secretKey ?? ''),
+            'secret_key_preview' => $secretKey ? substr($secretKey, 0, 10) . '...' : 'Not set',
+            'config_path' => 'services.paystack.secret_key'
+        ]);
+    });
+
     Route::post('verify-account', function (Request $request) {
         $request->validate([
             'account_number' => 'required|string|size:10',
