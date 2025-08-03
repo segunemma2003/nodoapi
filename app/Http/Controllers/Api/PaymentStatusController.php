@@ -20,10 +20,6 @@ class PaymentStatusController extends Controller
         $validator = Validator::make($request->all(), [
             'po_number' => 'required|string|max:50',
             'payment_status' => 'required|in:unpaid,partially_paid,fully_paid',
-            'total_paid_amount' => 'required|numeric|min:0',
-            'outstanding_amount' => 'required|numeric|min:0',
-            'webhook_signature' => 'required|string',
-            'timestamp' => 'required|integer',
         ]);
 
         if ($validator->fails()) {
@@ -32,14 +28,6 @@ class PaymentStatusController extends Controller
                 'message' => 'Validation failed',
                 'errors' => $validator->errors()
             ], 400);
-        }
-
-        // Verify webhook signature
-        if (!$this->verifyWebhookSignature($request)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid webhook signature'
-            ], 401);
         }
 
         try {
@@ -54,22 +42,24 @@ class PaymentStatusController extends Controller
                 ], 404);
             }
 
-            // Update payment status
+            // Calculate payment amounts based on status
+            $paymentAmounts = $this->calculatePaymentAmounts($po, $request->payment_status);
+
+            // Update payment status and amounts
             $po->update([
                 'payment_status' => $request->payment_status,
-                'total_paid_amount' => $request->total_paid_amount,
-                'outstanding_amount' => $request->outstanding_amount,
+                'total_paid_amount' => $paymentAmounts['total_paid_amount'],
+                'outstanding_amount' => $paymentAmounts['outstanding_amount'],
             ]);
 
             // Log the update
-            Log::info('Payment status updated via webhook', [
+            Log::info('Payment status updated via API', [
                 'po_number' => $po->po_number,
                 'po_id' => $po->id,
                 'old_status' => $po->getOriginal('payment_status'),
                 'new_status' => $request->payment_status,
-                'total_paid' => $request->total_paid_amount,
-                'outstanding' => $request->outstanding_amount,
-                'webhook_timestamp' => $request->timestamp,
+                'total_paid' => $paymentAmounts['total_paid_amount'],
+                'outstanding' => $paymentAmounts['outstanding_amount'],
             ]);
 
             return response()->json([
@@ -81,12 +71,13 @@ class PaymentStatusController extends Controller
                     'payment_status' => $po->payment_status,
                     'total_paid_amount' => $po->total_paid_amount,
                     'outstanding_amount' => $po->outstanding_amount,
+                    'net_amount' => $po->net_amount,
                     'updated_at' => $po->updated_at,
                 ]
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Failed to update payment status via webhook', [
+            Log::error('Failed to update payment status via API', [
                 'po_number' => $request->po_number,
                 'error' => $e->getMessage(),
                 'request_data' => $request->all(),
@@ -148,20 +139,37 @@ class PaymentStatusController extends Controller
     }
 
     /**
-     * Verify webhook signature
+     * Calculate payment amounts based on the new payment status.
+     * This method is used to determine the total_paid_amount and outstanding_amount
+     * when the payment_status is updated via API.
      */
-    private function verifyWebhookSignature(Request $request)
+    private function calculatePaymentAmounts(PurchaseOrder $po, $newStatus)
     {
-        $webhookSecret = config('services.payment_webhook.secret_key');
+        $totalAmount = $po->net_amount;
+        $totalPaid = $po->total_paid_amount;
+        $outstanding = $po->outstanding_amount;
 
-        if (empty($webhookSecret)) {
-            Log::warning('Webhook secret key not configured');
-            return false;
+        switch ($newStatus) {
+            case 'unpaid':
+                $totalPaid = 0;
+                $outstanding = $totalAmount;
+                break;
+            case 'partially_paid':
+                // This case is tricky. If it was 'fully_paid', outstanding would be 0.
+                // If it was 'unpaid', outstanding would be total.
+                // If it was 'partially_paid', outstanding would be total - totalPaid.
+                // So, if totalPaid is 0, outstanding is total. If totalPaid is > 0, outstanding is total - totalPaid.
+                $outstanding = $totalAmount - $totalPaid;
+                break;
+            case 'fully_paid':
+                $totalPaid = $totalAmount;
+                $outstanding = 0;
+                break;
         }
 
-        $payload = $request->po_number . $request->payment_status . $request->total_paid_amount . $request->outstanding_amount . $request->timestamp;
-        $expectedSignature = hash_hmac('sha256', $payload, $webhookSecret);
-
-        return hash_equals($expectedSignature, $request->webhook_signature);
+        return [
+            'total_paid_amount' => $totalPaid,
+            'outstanding_amount' => $outstanding,
+        ];
     }
 }
