@@ -1570,6 +1570,14 @@ private function generatePDFFromHTML($html, $filePath)
  */
 public function rejectPurchaseOrder(Request $request, PurchaseOrder $po)
     {
+        // Debug logging
+        Log::info('Rejecting Purchase Order', [
+            'po_id' => $po->id,
+            'po_number' => $po->po_number,
+            'status' => $po->status,
+            'admin_id' => Auth::id()
+        ]);
+
         if ($po->status !== 'pending') {
             return response()->json([
                 'success' => false,
@@ -1591,18 +1599,26 @@ public function rejectPurchaseOrder(Request $request, PurchaseOrder $po)
             if ($po->status === 'pending') {
                 $business->available_balance += $po->net_amount;
                 $business->credit_balance -= $po->net_amount;
-                $business->credit_limit = $business->available_balance;
                 $business->save();
 
                 // Log the restoration
-                $business->logBalanceTransaction(
-                    'available',
-                    $po->net_amount,
-                    'credit',
-                    'Spending power restored due to PO rejection',
-                    'po_rejection',
-                    $po->id
-                );
+                try {
+                    $business->logBalanceTransaction(
+                        'available',
+                        $po->net_amount,
+                        'credit',
+                        'Spending power restored due to PO rejection',
+                        'po_rejection',
+                        $po->id
+                    );
+                } catch (\Exception $e) {
+                    Log::error('Failed to log balance transaction for PO rejection', [
+                        'po_id' => $po->id,
+                        'business_id' => $business->id,
+                        'error' => $e->getMessage()
+                    ]);
+                    // Continue with the rejection even if logging fails
+                }
             }
 
             $po->update([
@@ -1615,7 +1631,15 @@ public function rejectPurchaseOrder(Request $request, PurchaseOrder $po)
             DB::commit();
 
             // Send rejection notification only to vendor
-            $this->sendRejectionNotifications($po, $vendor, $request->reason);
+            if ($vendor && $vendor->email) {
+                $this->sendRejectionNotifications($po, $vendor, $request->reason);
+            } else {
+                Log::warning('Cannot send rejection notification - vendor email missing', [
+                    'po_id' => $po->id,
+                    'vendor_id' => $vendor->id ?? 'No vendor',
+                    'vendor_email' => $vendor->email ?? 'No email'
+                ]);
+            }
 
             return response()->json([
                 'success' => true,
@@ -1766,8 +1790,10 @@ public function rejectPurchaseOrder(Request $request, PurchaseOrder $po)
         } catch (\Exception $e) {
             Log::error('Failed to send rejection notification', [
                 'po_id' => $po->id,
+                'vendor_email' => $vendor->email ?? 'No email',
                 'error' => $e->getMessage(),
             ]);
+            // Don't throw the exception - just log it
         }
     }
 

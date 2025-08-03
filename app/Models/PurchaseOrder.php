@@ -206,6 +206,8 @@ public function scopeOverdue($query)
     // Update payment amounts after payment confirmation
     public function updatePaymentAmounts($paymentAmount)
     {
+        $oldPaymentStatus = $this->payment_status;
+
         $this->total_paid_amount += $paymentAmount;
         $this->outstanding_amount = max(0, $this->net_amount - $this->total_paid_amount);
 
@@ -219,6 +221,19 @@ public function scopeOverdue($query)
         }
 
         $this->save();
+
+        // Send webhook if payment status changed
+        if ($oldPaymentStatus !== $this->payment_status) {
+            try {
+                $webhookController = app(\App\Http\Controllers\Api\WebhookController::class);
+                $webhookController->sendPaymentStatusWebhook($this, $oldPaymentStatus);
+            } catch (\Exception $e) {
+                Log::error('Failed to send payment status webhook', [
+                    'po_id' => $this->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
 
     // Get status badge class for UI
@@ -330,6 +345,19 @@ public function scopeOverdue($query)
             }
             if (!isset($po->payment_status)) {
                 $po->payment_status = 'unpaid';
+            }
+        });
+
+        // Send webhook when PO is created
+        static::created(function ($po) {
+            try {
+                $webhookController = app(\App\Http\Controllers\Api\WebhookController::class);
+                $webhookController->sendPoCreatedWebhook($po);
+            } catch (\Exception $e) {
+                Log::error('Failed to send PO creation webhook', [
+                    'po_id' => $po->id,
+                    'error' => $e->getMessage(),
+                ]);
             }
         });
 

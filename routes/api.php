@@ -228,6 +228,12 @@ Route::prefix('webhooks')->group(function () {
     Route::post('paystack', [App\Http\Controllers\Api\PaystackWebhookController::class, 'handleWebhook']);
 });
 
+// OPEN API - Payment Status Updates (No authentication required)
+Route::prefix('payment-status')->group(function () {
+    Route::post('update', [App\Http\Controllers\Api\PaymentStatusController::class, 'updatePaymentStatus']);
+    Route::get('po-details', [App\Http\Controllers\Api\PaymentStatusController::class, 'getPoDetails']);
+});
+
 Route::prefix('banks')->group(function () {
     Route::get('/', function () {
         $paystackService = app(App\Services\PaystackService::class);

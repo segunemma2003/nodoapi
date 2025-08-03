@@ -41,4 +41,9 @@ return [
         'payment_url' => env('PAYSTACK_PAYMENT_URL', 'https://api.paystack.co'),
     ],
 
+    'payment_webhook' => [
+        'secret_key' => env('PAYMENT_WEBHOOK_SECRET_KEY'),
+        'enabled' => env('PAYMENT_WEBHOOK_ENABLED', true),
+    ],
+
 ];
