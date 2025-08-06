@@ -124,8 +124,8 @@ class BusinessController extends Controller
         'category' => 'nullable|string|max:100',
         'payment_terms' => 'nullable|array',
         // NEW: Bank details validation for payments
-        'account_number' => 'required|string|min:10|max:10',
-        'bank_code' => 'required|string|size:3',
+        'account_number' => 'required|string|min:10|max:11', // Allow 10-11 digits for phone numbers
+        'bank_code' => 'required|string|max:10', // Allow up to 10 digits for fintech codes
         'bank_name' => 'required|string|max:255',
     ]);
 
@@ -1664,6 +1664,81 @@ public function uploadLogo(Request $request)
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * @OA\Post(
+     *     path="/api/business/test-bank-verification",
+     *     summary="Test bank account verification for fintech companies",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"account_number","bank_code"},
+     *             @OA\Property(property="account_number", type="string", example="9036444724"),
+     *             @OA\Property(property="bank_code", type="string", example="999992")
+     *         )
+     *     ),
+     *     @OA\Response(response=200, description="Bank verification test result")
+     * )
+     */
+    public function testBankVerification(Request $request)
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+            $request->validate([
+        'account_number' => 'required|string|min:10|max:11',
+        'bank_code' => 'required|string|max:10', // Allow up to 10 digits for fintech codes
+    ]);
+
+        $paystackService = app(PaystackService::class);
+
+        // Test the bank verification
+        $result = $paystackService->verifyAccountNumber(
+            $request->account_number,
+            $request->bank_code
+        );
+
+        // Get available fintech banks for reference
+        $banksResult = $paystackService->listBanks();
+        $fintechBanks = [];
+
+        if ($banksResult['success']) {
+            $banks = $banksResult['data'];
+            $fintechBanks = array_filter($banks, function($bank) {
+                $name = strtolower($bank['name']);
+                return strpos($name, 'opay') !== false ||
+                       strpos($name, 'moniepoint') !== false ||
+                       strpos($name, 'palm') !== false ||
+                       strpos($name, 'fintech') !== false;
+            });
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Bank verification test completed',
+            'data' => [
+                'verification_result' => $result,
+                'test_details' => [
+                    'account_number' => $request->account_number,
+                    'bank_code' => $request->bank_code,
+                    'tested_at' => now()->format('Y-m-d H:i:s'),
+                ],
+                'available_fintech_banks' => array_values($fintechBanks),
+                'known_fintech_codes' => [
+                    'OPay' => '999992',
+                    'MoniePoint' => '50515',
+                    'PalmPay' => '999991'
+                ]
+            ]
+        ]);
     }
 
 }

@@ -173,6 +173,9 @@ Route::prefix('business')->middleware(['auth:sanctum', 'business'])->group(funct
     Route::post('vendors', [BusinessController::class, 'createVendor']);
     Route::delete('vendors/{vendor}', [BusinessController::class, 'deleteVendor']);
 
+    // Bank verification testing
+    Route::post('test-bank-verification', [BusinessController::class, 'testBankVerification']);
+
     // Purchase order management
     Route::get('purchase-orders', [BusinessController::class, 'getPurchaseOrders']);
     Route::post('purchase-orders', [BusinessController::class, 'createPurchaseOrder']);
@@ -201,9 +204,58 @@ Route::prefix('public')->group(function () {
     Route::get('health', function () {
         return response()->json([
             'status' => 'healthy',
-            'timestamp' => now(),
-            'system' => 'B2B Revolving Credit Platform',
-            'version' => '2.0.0'
+            'timestamp' => now()->format('Y-m-d H:i:s'),
+            'environment' => config('app.env')
+        ]);
+    });
+
+    // Public bank verification test endpoint
+    Route::post('test-bank-verification', function (Request $request) {
+        $request->validate([
+            'account_number' => 'required|string|min:10|max:11',
+            'bank_code' => 'required|string|max:10', // Allow up to 10 digits for fintech codes
+        ]);
+
+        $paystackService = app(\App\Services\PaystackService::class);
+
+        // Test the bank verification
+        $result = $paystackService->verifyAccountNumber(
+            $request->account_number,
+            $request->bank_code
+        );
+
+        // Get available fintech banks for reference
+        $banksResult = $paystackService->listBanks();
+        $fintechBanks = [];
+
+        if ($banksResult['success']) {
+            $banks = $banksResult['data'];
+            $fintechBanks = array_filter($banks, function($bank) {
+                $name = strtolower($bank['name']);
+                return strpos($name, 'opay') !== false ||
+                       strpos($name, 'moniepoint') !== false ||
+                       strpos($name, 'palm') !== false ||
+                       strpos($name, 'fintech') !== false;
+            });
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Bank verification test completed',
+            'data' => [
+                'verification_result' => $result,
+                'test_details' => [
+                    'account_number' => $request->account_number,
+                    'bank_code' => $request->bank_code,
+                    'tested_at' => now()->format('Y-m-d H:i:s'),
+                ],
+                'available_fintech_banks' => array_values($fintechBanks),
+                'known_fintech_codes' => [
+                    'OPay' => '999992',
+                    'MoniePoint' => '50515',
+                    'PalmPay' => '999991'
+                ]
+            ]
         ]);
     });
 });
@@ -253,8 +305,8 @@ Route::prefix('banks')->group(function () {
 
     Route::post('verify-account', function (Request $request) {
         $request->validate([
-            'account_number' => 'required|string|size:10',
-            'bank_code' => 'required|string|size:3'
+            'account_number' => 'required|string|min:10|max:11',
+            'bank_code' => 'required|string|max:10'
         ]);
 
         $paystackService = app(App\Services\PaystackService::class);
