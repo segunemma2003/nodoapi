@@ -171,6 +171,7 @@ Route::prefix('business')->middleware(['auth:sanctum', 'business'])->group(funct
     // Vendor management
     Route::get('vendors', [BusinessController::class, 'getVendors']);
     Route::post('vendors', [BusinessController::class, 'createVendor']);
+    Route::delete('vendors/{vendor}', [BusinessController::class, 'deleteVendor']);
 
     // Purchase order management
     Route::get('purchase-orders', [BusinessController::class, 'getPurchaseOrders']);

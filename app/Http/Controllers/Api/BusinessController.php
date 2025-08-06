@@ -407,7 +407,7 @@ class BusinessController extends Controller
         }
 
         // Get the S3 URL
-        $receiptUrl = Storage::disk('s3')->url($receiptPath);
+        $receiptUrl = config('filesystems.disks.s3.url') . '/' . $receiptPath;
 
         Log::info('Receipt uploaded successfully', [
             'path' => $receiptPath,
@@ -806,6 +806,137 @@ class BusinessController extends Controller
                 ];
             })
         ]);
+    }
+
+    /**
+     * @OA\Delete(
+     *     path="/api/business/vendors/{vendor}",
+     *     summary="Delete a vendor",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Parameter(
+     *         name="vendor",
+     *         in="path",
+     *         required=true,
+     *         @OA\Schema(type="integer")
+     *     ),
+     *     @OA\Response(response=200, description="Vendor deleted successfully"),
+     *     @OA\Response(response=403, description="Unauthorized - Cannot delete vendor with active purchase orders"),
+     *     @OA\Response(response=404, description="Vendor not found")
+     * )
+     */
+    public function deleteVendor(Vendor $vendor)
+    {
+        $business = Auth::user();
+        if(!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        // Verify vendor belongs to business
+        if ($vendor->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Vendor not found or access denied'
+            ], 404);
+        }
+
+        // Check if vendor has any purchase orders
+        $purchaseOrdersCount = $vendor->purchaseOrders()->count();
+        if ($purchaseOrdersCount > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete vendor with existing purchase orders',
+                'errors' => [
+                    'purchase_orders_count' => $purchaseOrdersCount,
+                    'vendor_id' => $vendor->id,
+                    'vendor_name' => $vendor->name,
+                    'suggestion' => 'All purchase orders must be completed or cancelled before deleting this vendor'
+                ]
+            ], 403);
+        }
+
+        // Check if vendor has any pending payments
+        $pendingPaymentsCount = $vendor->purchaseOrders()
+            ->whereHas('payments', function($query) {
+                $query->where('status', 'pending');
+            })
+            ->count();
+
+        if ($pendingPaymentsCount > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete vendor with pending payments',
+                'errors' => [
+                    'pending_payments_count' => $pendingPaymentsCount,
+                    'vendor_id' => $vendor->id,
+                    'vendor_name' => $vendor->name,
+                    'suggestion' => 'All pending payments must be processed before deleting this vendor'
+                ]
+            ], 403);
+        }
+
+        DB::beginTransaction();
+        try {
+            // Store vendor info for logging before deletion
+            $vendorInfo = [
+                'id' => $vendor->id,
+                'name' => $vendor->name,
+                'email' => $vendor->email,
+                'vendor_code' => $vendor->vendor_code,
+                'business_id' => $vendor->business_id,
+                'business_name' => $business->name,
+                'status' => $vendor->status,
+                'created_at' => $vendor->created_at,
+            ];
+
+            // Delete the vendor
+            $vendor->delete();
+
+            // Log the deletion
+            Log::info('Vendor deleted by business', [
+                'vendor_info' => $vendorInfo,
+                'deleted_by_business_id' => $business->id,
+                'deleted_by_business_name' => $business->name,
+                'deleted_at' => now(),
+                'ip_address' => request()->ip(),
+                'user_agent' => request()->userAgent(),
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Vendor deleted successfully',
+                'data' => [
+                    'deleted_vendor' => $vendorInfo,
+                    'deletion_summary' => [
+                        'vendor_id' => $vendorInfo['id'],
+                        'vendor_name' => $vendorInfo['name'],
+                        'vendor_code' => $vendorInfo['vendor_code'],
+                        'deleted_at' => now()->format('Y-m-d H:i:s'),
+                        'deleted_by' => $business->name,
+                    ]
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollback();
+
+            Log::error('Failed to delete vendor', [
+                'vendor_id' => $vendor->id,
+                'business_id' => $business->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete vendor',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -1405,7 +1536,7 @@ public function uploadLogo(Request $request)
         // Store new logo to S3
        $logoPath = Storage::disk('s3')->putFileAs('business_logos/' . $business->id, $request->file('logo'), basename($filename));
 
-         $logoUrl = Storage::disk('s3')->url($logoPath);
+         $logoUrl = config('filesystems.disks.s3.url') . '/' . $logoPath;
 
         $business->update(['logo_path' => $logoPath]);
 
