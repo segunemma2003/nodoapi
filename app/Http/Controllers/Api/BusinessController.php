@@ -103,6 +103,20 @@ class BusinessController extends Controller
      *     summary="Create a new vendor",
      *     tags={"Business"},
      *     security={{"sanctumAuth":{}}},
+     *     @OA\RequestBody(
+     *         required=true,
+     *         @OA\JsonContent(
+     *             required={"name","account_number","bank_code","bank_name"},
+     *             @OA\Property(property="name", type="string", example="ABC Supplies Ltd"),
+     *             @OA\Property(property="email", type="string", format="email", example="contact@abcsupplies.com"),
+     *             @OA\Property(property="phone", type="string", example="+2348012345678"),
+     *             @OA\Property(property="address", type="string", example="123 Main Street, Lagos"),
+     *             @OA\Property(property="category", type="string", example="Office Supplies"),
+     *             @OA\Property(property="account_number", type="string", example="1234567890"),
+     *             @OA\Property(property="bank_code", type="string", example="999992"),
+     *             @OA\Property(property="bank_name", type="string", example="OPay")
+     *         )
+     *     ),
      *     @OA\Response(response=201, description="Vendor created successfully")
      * )
      */
@@ -118,7 +132,7 @@ class BusinessController extends Controller
 
     $request->validate([
         'name' => 'required|string|max:255',
-        'email' => 'required|email|unique:vendors,email',
+        'email' => 'nullable|email|unique:vendors,email',
         'phone' => 'nullable|string|max:20',
         'address' => 'nullable|string',
         'category' => 'nullable|string|max:100',
@@ -128,6 +142,15 @@ class BusinessController extends Controller
         'bank_code' => 'required|string|max:10', // Allow up to 10 digits for fintech codes
         'bank_name' => 'required|string|max:255',
     ]);
+
+    // Generate email if not provided
+    $email = $request->email;
+    if (empty($email)) {
+        do {
+            $randomNumber = mt_rand(100000, 999999);
+            $email = $randomNumber . '_foodstuff@foodstuff.store';
+        } while (Vendor::where('email', $email)->exists());
+    }
 
     // Optional: Verify bank account with Paystack
     $paystackService = app(PaystackService::class);
@@ -145,7 +168,7 @@ class BusinessController extends Controller
 
     $vendor = $business->vendors()->create([
         'name' => $request->name,
-        'email' => $request->email,
+        'email' => $email,
         'phone' => $request->phone,
         'address' => $request->address,
         'category' => $request->category,
@@ -164,9 +187,14 @@ class BusinessController extends Controller
     // Notify admin of new vendor
     $this->notifyAdminOfNewVendor($vendor);
 
+    $message = 'Vendor created successfully and sent for admin approval';
+    if (empty($request->email)) {
+        $message .= '. A default email was generated for this vendor.';
+    }
+
     return response()->json([
         'success' => true,
-        'message' => 'Vendor created successfully and sent for admin approval',
+        'message' => $message,
         'data' => $vendor
     ], 201);
 }

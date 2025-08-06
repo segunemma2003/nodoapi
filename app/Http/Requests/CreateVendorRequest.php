@@ -15,7 +15,7 @@ class CreateVendorRequest extends FormRequest
     {
         return [
             'name' => 'required|string|max:255',
-            'email' => 'required|email|unique:vendors,email',
+            'email' => 'nullable|email|unique:vendors,email',
             'phone' => 'nullable|string|max:20',
             'address' => 'nullable|string|max:500',
             'category' => 'nullable|string|max:100',
@@ -30,7 +30,6 @@ class CreateVendorRequest extends FormRequest
     {
         return [
             'name.required' => 'Vendor name is required',
-            'email.required' => 'Email address is required',
             'email.email' => 'Please provide a valid email address',
             'email.unique' => 'This email address is already registered',
         ];
