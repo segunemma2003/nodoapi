@@ -22,6 +22,27 @@ class PaystackService
     public function createTransferRecipient($data)
     {
         try {
+            // Validate account number format before sending to Paystack
+            if (isset($data['account_number'])) {
+                if (!preg_match('/^\d{10,11}$/', $data['account_number'])) {
+                    return [
+                        'success' => false,
+                        'message' => 'Invalid account number format. Must be 10-11 digits only.',
+                        'error' => 'ACCOUNT_NUMBER_FORMAT_ERROR'
+                    ];
+                }
+            }
+
+            // Validate bank code format
+            if (isset($data['bank_code'])) {
+                if (!preg_match('/^\d{3,10}$/', $data['bank_code'])) {
+                    return [
+                        'success' => false,
+                        'message' => 'Invalid bank code format. Must be 3-10 digits only.',
+                        'error' => 'BANK_CODE_FORMAT_ERROR'
+                    ];
+                }
+            }
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $this->secretKey,
                 'Content-Type' => 'application/json',
@@ -46,7 +67,11 @@ class PaystackService
         } catch (\Exception $e) {
             Log::error('Paystack createTransferRecipient failed', [
                 'data' => $data,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'error_class' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             return [
@@ -86,7 +111,11 @@ class PaystackService
         } catch (\Exception $e) {
             Log::error('Paystack initiateTransfer failed', [
                 'data' => $data,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'error_class' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             return [

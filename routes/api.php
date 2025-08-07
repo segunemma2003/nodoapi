@@ -54,6 +54,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         Route::post('{vendor}/reject', [AdminController::class, 'rejectVendor']);
     });
 
+    // TESTING ENDPOINTS
+    Route::get('test-paystack', [AdminController::class, 'testPaystackService']);
+    Route::post('test-po-approval', [AdminController::class, 'testPurchaseOrderApproval']);
+
     // PURCHASE ORDERS MANAGEMENT
     Route::prefix('purchase-orders')->group(function () {
         Route::get('/', [AdminController::class, 'getPurchaseOrders']);

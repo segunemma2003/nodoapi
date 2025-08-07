@@ -924,6 +924,21 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
             ], 400);
         }
 
+        // Validate account number format
+        if (!preg_match('/^\d{10,11}$/', $vendor->account_number)) {
+            DB::rollback();
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid account number format. Must be 10-11 digits.',
+                'vendor_details' => [
+                    'name' => $vendor->name,
+                    'account_number' => $vendor->account_number,
+                    'account_number_length' => strlen($vendor->account_number),
+                    'expected_format' => '10-11 digits only'
+                ]
+            ], 400);
+        }
+
         // Update PO status to approved
         $po->update([
             'status' => 'approved',
@@ -933,7 +948,23 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
         ]);
 
         // Make automatic payment to VENDOR
+        Log::info('Starting payment to vendor', [
+            'po_id' => $po->id,
+            'po_number' => $po->po_number,
+            'vendor_id' => $vendor->id,
+            'vendor_name' => $vendor->name,
+            'vendor_account' => $vendor->account_number,
+            'vendor_bank_code' => $vendor->bank_code,
+            'amount' => $po->net_amount
+        ]);
+
         $paymentResult = $this->makePaymentToVendor($po, $vendor);
+
+        Log::info('Payment result received', [
+            'po_id' => $po->id,
+            'payment_success' => $paymentResult['success'],
+            'payment_error' => $paymentResult['error'] ?? null
+        ]);
 
         if (!$paymentResult['success']) {
             // If payment fails, revert the approval
@@ -948,7 +979,13 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
                 'success' => false,
                 'message' => 'Purchase order approval failed due to payment error',
                 'error' => $paymentResult['error'],
-                'vendor_bank_details' => $vendor->getBankDetailsFormatted()
+                'vendor_bank_details' => $vendor->getBankDetailsFormatted(),
+                'debug_info' => [
+                    'po_number' => $po->po_number,
+                    'vendor_account' => $vendor->account_number,
+                    'vendor_bank_code' => $vendor->bank_code,
+                    'amount' => $po->net_amount
+                ]
             ], 500);
         }
 
@@ -989,15 +1026,27 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
         DB::rollback();
         Log::error('Purchase order approval failed', [
             'po_id' => $po->id,
+            'po_number' => $po->po_number,
+            'vendor_id' => $vendor->id,
+            'vendor_name' => $vendor->name,
             'vendor_bank_details' => $vendor->getBankDetailsFormatted(),
+            'amount' => $po->net_amount,
             'error' => $e->getMessage(),
+            'error_class' => get_class($e),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
             'trace' => $e->getTraceAsString()
         ]);
 
         return response()->json([
             'success' => false,
             'message' => 'Failed to approve purchase order',
-            'error' => $e->getMessage()
+            'error' => $e->getMessage(),
+            'error_details' => [
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'class' => get_class($e)
+            ]
         ], 500);
     }
 }
@@ -1005,6 +1054,12 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
 private function makePaymentToVendor(PurchaseOrder $po, $vendor)
 {
     try {
+        Log::info('Creating transfer recipient', [
+            'vendor_name' => $vendor->name,
+            'account_number' => $vendor->account_number,
+            'bank_code' => $vendor->bank_code
+        ]);
+
         // Create transfer recipient for vendor if not exists
         $recipientData = $this->paystackService->createTransferRecipient([
             'type' => 'nuban',
@@ -1012,6 +1067,12 @@ private function makePaymentToVendor(PurchaseOrder $po, $vendor)
             'account_number' => $vendor->account_number,
             'bank_code' => $vendor->bank_code,
             'currency' => 'NGN'
+        ]);
+
+        Log::info('Transfer recipient result', [
+            'success' => $recipientData['success'],
+            'message' => $recipientData['message'] ?? null,
+            'error' => $recipientData['error'] ?? null
         ]);
 
         if (!$recipientData['success']) {
@@ -1028,12 +1089,26 @@ private function makePaymentToVendor(PurchaseOrder $po, $vendor)
 
         // Initiate transfer to vendor
         $transferAmount = $po->net_amount * 100; // Convert to kobo
+
+        Log::info('Initiating transfer', [
+            'amount_naira' => $po->net_amount,
+            'amount_kobo' => $transferAmount,
+            'recipient_code' => $recipientData['data']['recipient_code'],
+            'po_number' => $po->po_number
+        ]);
+
         $transferData = $this->paystackService->initiateTransfer([
             'source' => 'balance',
             'amount' => $transferAmount,
             'recipient' => $recipientData['data']['recipient_code'],
             'reason' => "Payment for PO #{$po->po_number} - {$po->description}",
             'reference' => 'PO_VENDOR_' . $po->po_number . '_' . time()
+        ]);
+
+        Log::info('Transfer initiation result', [
+            'success' => $transferData['success'],
+            'message' => $transferData['message'] ?? null,
+            'error' => $transferData['error'] ?? null
         ]);
 
         if (!$transferData['success']) {
@@ -2660,10 +2735,106 @@ public function rejectVendor(Request $request, Vendor $vendor)
     }
 }
 
-/**
- * Get vendor details for admin
- */
-public function getVendorDetails(Vendor $vendor)
+    /**
+     * Test specific purchase order approval process
+     */
+    public function testPurchaseOrderApproval(Request $request)
+    {
+        $request->validate([
+            'po_number' => 'required|string'
+        ]);
+
+        try {
+            $po = PurchaseOrder::where('po_number', $request->po_number)->first();
+
+            if (!$po) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Purchase order not found'
+                ], 404);
+            }
+
+            $vendor = $po->vendor;
+            $business = $po->business;
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Purchase order details retrieved',
+                'data' => [
+                    'purchase_order' => [
+                        'id' => $po->id,
+                        'po_number' => $po->po_number,
+                        'status' => $po->status,
+                        'net_amount' => $po->net_amount,
+                        'description' => $po->description
+                    ],
+                    'vendor' => [
+                        'id' => $vendor->id,
+                        'name' => $vendor->name,
+                        'account_number' => $vendor->account_number,
+                        'bank_code' => $vendor->bank_code,
+                        'bank_name' => $vendor->bank_name,
+                        'has_complete_details' => $vendor->hasCompletePaymentDetails(),
+                        'account_number_length' => strlen($vendor->account_number ?? ''),
+                        'bank_code_length' => strlen($vendor->bank_code ?? '')
+                    ],
+                    'business' => [
+                        'id' => $business->id,
+                        'name' => $business->name,
+                        'available_balance' => $business->available_balance
+                    ],
+                    'validation_checks' => [
+                        'account_number_format' => preg_match('/^\d{10,11}$/', $vendor->account_number ?? ''),
+                        'bank_code_format' => preg_match('/^\d{3,10}$/', $vendor->bank_code ?? ''),
+                        'can_be_approved' => $po->status === 'pending'
+                    ]
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve purchase order details',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Test Paystack service connectivity
+     */
+    public function testPaystackService()
+    {
+        try {
+            // Test basic connectivity
+            $balance = $this->paystackService->getBalance();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Paystack service test completed',
+                'data' => [
+                    'balance' => $balance,
+                    'service_status' => 'connected'
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Paystack service test failed',
+                'error' => $e->getMessage(),
+                'error_details' => [
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                    'class' => get_class($e)
+                ]
+            ], 500);
+        }
+    }
+
+    /**
+     * Get vendor details for admin
+     */
+    public function getVendorDetails(Vendor $vendor)
 {
     $vendor->load(['business', 'approvedBy', 'rejectedBy', 'purchaseOrders']);
 
