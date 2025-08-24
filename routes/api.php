@@ -279,6 +279,63 @@ Route::get('/test', function () {
     ]);
 });
 
+Route::get('/test-po/{po_number}', function ($po_number) {
+    try {
+        $po = \App\Models\PurchaseOrder::where('po_number', $po_number)->first();
+
+        if (!$po) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order not found'
+            ], 404);
+        }
+
+        $vendor = $po->vendor;
+        $business = $po->business;
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Purchase order details retrieved',
+            'data' => [
+                'purchase_order' => [
+                    'id' => $po->id,
+                    'po_number' => $po->po_number,
+                    'status' => $po->status,
+                    'net_amount' => $po->net_amount,
+                    'description' => $po->description
+                ],
+                'vendor' => [
+                    'id' => $vendor->id,
+                    'name' => $vendor->name,
+                    'account_number' => $vendor->account_number,
+                    'bank_code' => $vendor->bank_code,
+                    'bank_name' => $vendor->bank_name,
+                    'has_complete_details' => $vendor->hasCompletePaymentDetails(),
+                    'account_number_length' => strlen($vendor->account_number ?? ''),
+                    'bank_code_length' => strlen($vendor->bank_code ?? '')
+                ],
+                'business' => [
+                    'id' => $business->id,
+                    'name' => $business->name,
+                    'available_balance' => $business->available_balance
+                ],
+                'validation_checks' => [
+                    'account_number_format' => preg_match('/^\d{10,11}$/', $vendor->account_number ?? ''),
+                    'bank_code_format' => preg_match('/^\d{3,10}$/', $vendor->bank_code ?? ''),
+                    'can_be_approved' => $po->status === 'pending'
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to retrieve purchase order details',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+});
+
 
 
 Route::prefix('webhooks')->group(function () {
