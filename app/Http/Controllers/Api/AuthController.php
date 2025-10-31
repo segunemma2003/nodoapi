@@ -73,8 +73,11 @@ class AuthController extends Controller
         // Revoke existing tokens
         $user->tokens()->delete();
 
-        // Create new token with admin abilities
-        $token = $user->createToken('admin-token', ['admin:*'])->plainTextToken;
+        // Create new token with admin abilities (never expires)
+        $tokenResult = $user->createToken('admin-token', ['admin:*']);
+        $tokenResult->accessToken->expires_at = null;
+        $tokenResult->accessToken->save();
+        $token = $tokenResult->plainTextToken;
 
         return response()->json([
             'success' => true,
@@ -126,8 +129,11 @@ class AuthController extends Controller
         // Revoke existing tokens
         $business->tokens()->delete();
 
-        // Create new token with business abilities
-        $token = $business->createToken('business-token', ['business:*'])->plainTextToken;
+        // Create new token with business abilities (never expires)
+        $tokenResult = $business->createToken('business-token', ['business:*']);
+        $tokenResult->accessToken->expires_at = null;
+        $tokenResult->accessToken->save();
+        $token = $tokenResult->plainTextToken;
 
         return response()->json([
             'success' => true,
