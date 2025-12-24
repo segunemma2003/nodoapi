@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\BusinessController;
 use App\Http\Controllers\Api\AdminInterestRateController;
 use App\Http\Controllers\Api\AdminSupportController;
 use App\Http\Controllers\Api\BusinessSupportController;
+use App\Http\Controllers\Api\ProductController;
 use Illuminate\Http\Request;
 
 // Authentication routes
@@ -201,6 +202,18 @@ Route::prefix('business')->middleware(['auth:sanctum', 'business'])->group(funct
 
     // Spending optimization
     Route::get('spending-suggestions', [BusinessController::class, 'getSpendingSuggestions']);
+
+    // Product management
+    Route::prefix('products')->group(function () {
+        Route::get('/', [ProductController::class, 'index']);
+        Route::get('categories', [ProductController::class, 'getCategories']);
+        Route::get('stats', [ProductController::class, 'getStats']);
+        Route::post('/', [ProductController::class, 'store']);
+        Route::post('bulk', [ProductController::class, 'bulkCreate']);
+        Route::get('{id}', [ProductController::class, 'show']);
+        Route::put('{id}', [ProductController::class, 'update']);
+        Route::delete('{id}', [ProductController::class, 'destroy']);
+    });
 });
 
 // PUBLIC API ENDPOINTS
