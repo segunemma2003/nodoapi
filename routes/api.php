@@ -64,6 +64,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         Route::get('/', [AdminController::class, 'getPurchaseOrders']);
         Route::get('{po}', [AdminController::class, 'getPurchaseOrderDetails']);
         Route::post('{po}/approve', [AdminController::class, 'approvePurchaseOrder']);
+        Route::post('{po}/finalize-transfer', [AdminController::class, 'finalizePurchaseOrderTransfer']);
         Route::post('{po}/reject', [AdminController::class, 'rejectPurchaseOrder']);
         Route::put('{po}/update-status', [AdminController::class, 'updatePurchaseOrderStatus']);
     });

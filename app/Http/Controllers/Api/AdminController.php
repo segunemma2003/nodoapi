@@ -989,6 +989,35 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
             ], 500);
         }
 
+        // Check if OTP is required for transfer finalization
+        if (isset($paymentResult['otp_required']) && $paymentResult['otp_required'] === true) {
+            DB::commit();
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Purchase order approved. Transfer initiated. OTP required to finalize payment.',
+                'data' => [
+                    'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
+                    'approval_details' => [
+                        'approved_by' => $admin->name,
+                        'approved_at' => now(),
+                        'notes' => $request->notes,
+                    ],
+                    'payment_details' => [
+                        'amount_paid' => $po->net_amount,
+                        'payment_reference' => $paymentResult['reference'],
+                        'payment_status' => 'pending_otp',
+                        'transfer_code' => $paymentResult['transfer_code'],
+                        'recipient' => $vendor->name,
+                        'recipient_account' => $vendor->account_number,
+                        'recipient_bank' => $vendor->bank_name,
+                        'otp_required' => true,
+                        'message' => $paymentResult['message'] ?? 'OTP has been sent to your registered phone/email. Please use the finalize endpoint to complete the transfer.'
+                    ]
+                ]
+            ]);
+        }
+
         // Generate PDFs
         $pdfResults = $this->generatePurchaseOrderPDFs($po, $paymentResult);
 
@@ -1047,6 +1076,112 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
                 'line' => $e->getLine(),
                 'class' => get_class($e)
             ]
+        ], 500);
+    }
+}
+
+/**
+ * Finalize transfer with OTP for an approved purchase order
+ */
+public function finalizePurchaseOrderTransfer(Request $request, PurchaseOrder $po)
+{
+    $request->validate([
+        'otp' => 'required|string|size:6'
+    ]);
+
+    // Check if PO is approved
+    if ($po->status !== 'approved') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Purchase order must be approved before finalizing transfer'
+        ], 400);
+    }
+
+    // Check if transfer_code exists
+    if (!$po->transfer_code) {
+        return response()->json([
+            'success' => false,
+            'message' => 'No pending transfer found for this purchase order'
+        ], 400);
+    }
+
+    DB::beginTransaction();
+    try {
+        $admin = Auth::user();
+        $vendor = $po->vendor;
+
+        // Finalize transfer with OTP
+        $finalizeResult = $this->paystackService->finalizeTransferWithOtp(
+            $po->transfer_code,
+            $request->otp
+        );
+
+        if (!$finalizeResult['success']) {
+            DB::rollback();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to finalize transfer: ' . $finalizeResult['message'],
+                'error' => $finalizeResult['error'] ?? null
+            ], 400);
+        }
+
+        // Verify transfer status after finalization
+        $transferCode = $po->transfer_code; // Store before clearing
+        $transferStatus = $this->paystackService->getTransferStatus($transferCode);
+        $transferStatusData = $transferStatus['data'] ?? [];
+        $transferStatusValue = $transferStatusData['status'] ?? 'unknown';
+
+        // Generate PDFs
+        $paymentResult = [
+            'success' => true,
+            'reference' => $transferStatusData['reference'] ?? null,
+            'transfer_code' => $transferCode,
+            'amount' => $po->net_amount,
+        ];
+        $pdfResults = $this->generatePurchaseOrderPDFs($po, $paymentResult);
+
+        // Clear transfer_code since transfer is finalized
+        $po->update(['transfer_code' => null]);
+        $pdfResults = $this->generatePurchaseOrderPDFs($po, $paymentResult);
+
+        DB::commit();
+
+        // Send notifications
+        $this->sendApprovalNotifications($po, $po->business, $vendor, $paymentResult, $pdfResults);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Transfer finalized successfully. Payment sent to vendor.',
+            'data' => [
+                'purchase_order' => $po->fresh(['business', 'vendor', 'approvedBy']),
+                'transfer_details' => [
+                    'transfer_code' => $po->transfer_code,
+                    'status' => $transferStatusValue,
+                    'amount' => $po->net_amount,
+                    'recipient' => $vendor->name,
+                    'recipient_account' => $vendor->account_number,
+                    'recipient_bank' => $vendor->bank_name,
+                ],
+                'documents' => [
+                    'purchase_order_pdf' => $pdfResults['po_pdf_path'] ?? null,
+                    'payment_receipt_pdf' => $pdfResults['receipt_pdf_path'] ?? null,
+                ]
+            ]
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollback();
+        Log::error('Transfer finalization failed', [
+            'po_id' => $po->id,
+            'po_number' => $po->po_number,
+            'transfer_code' => $po->transfer_code,
+            'error' => $e->getMessage()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to finalize transfer',
+            'error' => $e->getMessage()
         ], 500);
     }
 }
@@ -1128,8 +1263,30 @@ private function makePaymentToVendor(PurchaseOrder $po, $vendor)
             'transfer_code' => $transferData['data']['transfer_code']
         ]);
 
+        // Check transfer status to see if OTP is required
+        $transferStatus = $this->paystackService->getTransferStatus($transferData['data']['transfer_code']);
+        $transferStatusData = $transferStatus['data'] ?? [];
+        $transferStatusValue = $transferStatusData['status'] ?? 'unknown';
+
+        // If OTP is required, return special response
+        if ($transferStatusValue === 'otp') {
+            // Store transfer_code in PO for later finalization
+            $po->update(['transfer_code' => $transferData['data']['transfer_code']]);
+            
+            return [
+                'success' => true,
+                'otp_required' => true,
+                'reference' => $transferData['data']['reference'],
+                'transfer_code' => $transferData['data']['transfer_code'],
+                'amount' => $po->net_amount,
+                'recipient_code' => $recipientData['data']['recipient_code'],
+                'message' => 'Transfer initiated. OTP has been sent to your registered phone/email. Please provide OTP to finalize the transfer.'
+            ];
+        }
+
         return [
             'success' => true,
+            'otp_required' => false,
             'reference' => $transferData['data']['reference'],
             'transfer_code' => $transferData['data']['transfer_code'],
             'amount' => $po->net_amount,

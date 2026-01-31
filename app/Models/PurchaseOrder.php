@@ -31,6 +31,7 @@ class PurchaseOrder extends Model
         'approved_by',
         'interest_rate',
         'late_fee_amount',
+        'transfer_code',
     ];
 
     protected function casts(): array

@@ -337,4 +337,49 @@ class PaystackService
             ];
         }
     }
+
+    /**
+     * Finalize a transfer with OTP (Paystack)
+     */
+    public function finalizeTransferWithOtp($transferCode, $otp)
+    {
+        try {
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $this->secretKey,
+                'Content-Type' => 'application/json',
+            ])->post($this->baseUrl . '/transfer/finalize_transfer', [
+                'transfer_code' => $transferCode,
+                'otp' => $otp
+            ]);
+
+            $responseData = $response->json();
+
+            if ($response->successful() && $responseData['status']) {
+                return [
+                    'success' => true,
+                    'data' => $responseData['data'] ?? null,
+                    'message' => $responseData['message'] ?? 'Transfer finalized successfully'
+                ];
+            }
+
+            return [
+                'success' => false,
+                'message' => $responseData['message'] ?? 'Failed to finalize transfer',
+                'error' => $responseData
+            ];
+        } catch (\Exception $e) {
+            Log::error('Paystack finalizeTransferWithOtp failed', [
+                'transfer_code' => $transferCode,
+                'error' => $e->getMessage(),
+                'error_class' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return [
+                'success' => false,
+                'message' => 'Transfer finalization failed: ' . $e->getMessage()
+            ];
+        }
+    }
 }
