@@ -1828,6 +1828,74 @@ public function uploadLogo(Request $request)
         ]);
     }
 
+    /**
+     * Get the business's settlement wallet balance and virtual account
+     * details (provisioning a dedicated virtual account on first call).
+     */
+    public function getWallet(\App\Services\WalletService $walletService)
+    {
+        $business = Auth::user();
+        if (!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $business = $walletService->ensureVirtualAccount($business);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Wallet retrieved successfully',
+            'data' => [
+                'wallet_balance' => $business->wallet_balance,
+                'virtual_account' => $business->virtual_account_number ? [
+                    'account_number' => $business->virtual_account_number,
+                    'bank_name' => $business->virtual_account_bank_name,
+                    'account_name' => $business->virtual_account_name,
+                ] : null,
+            ],
+        ]);
+    }
+
+    /**
+     * Pay down a purchase order's outstanding amount from the business's
+     * own wallet balance (partial payment if the wallet can't cover it all).
+     */
+    public function payPurchaseOrderFromWallet(PurchaseOrder $po, \App\Services\WalletService $walletService)
+    {
+        $business = Auth::user();
+        if (!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        if ($po->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order not found or access denied'
+            ], 404);
+        }
+
+        $result = $walletService->settlePurchaseOrderFromWallet($po);
+
+        if (!$result['success']) {
+            return response()->json($result, 400);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $result['message'],
+            'data' => [
+                'amount_applied' => $result['amount_applied'],
+                'purchase_order' => $po->fresh(['vendor']),
+                'wallet_balance' => $business->fresh()->wallet_balance,
+            ],
+        ]);
+    }
+
 
      private function notifyAdminOfPendingPO(PurchaseOrder $purchaseOrder)
     {

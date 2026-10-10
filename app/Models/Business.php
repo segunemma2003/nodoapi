@@ -24,6 +24,12 @@ class Business extends Authenticatable
         'current_balance',        // Total assigned credit (constant)
         'credit_balance',         // Outstanding debt
         'treasury_collateral_balance', // Admin-managed platform funds
+        'wallet_balance',         // Funded via virtual account transfers, spent to settle POs
+        'paystack_customer_code',
+        'virtual_account_number',
+        'virtual_account_bank_name',
+        'virtual_account_name',
+        'paystack_dva_id',
         'credit_limit',          // Same as available_balance
         'is_active',
         'created_by',
@@ -51,6 +57,7 @@ class Business extends Authenticatable
             'current_balance' => 'decimal:2',
             'credit_balance' => 'decimal:2',
             'treasury_collateral_balance' => 'decimal:2',
+            'wallet_balance' => 'decimal:2',
             'credit_limit' => 'decimal:2',
             'custom_interest_rate' => 'decimal:2',
         ];

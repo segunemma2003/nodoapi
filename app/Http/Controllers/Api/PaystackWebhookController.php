@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\PaystackService;
+use App\Services\WalletService;
+use App\Models\Business;
 use App\Models\PurchaseOrder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -11,10 +13,12 @@ use Illuminate\Support\Facades\Log;
 class PaystackWebhookController extends Controller
 {
     protected $paystackService;
+    protected $walletService;
 
-    public function __construct(PaystackService $paystackService)
+    public function __construct(PaystackService $paystackService, WalletService $walletService)
     {
         $this->paystackService = $paystackService;
+        $this->walletService = $walletService;
     }
 
     /**
@@ -61,6 +65,10 @@ class PaystackWebhookController extends Controller
 
             case 'transfer.reversed':
                 $this->handleTransferReversed($event['data']);
+                break;
+
+            case 'charge.success':
+                $this->handleChargeSuccess($event['data']);
                 break;
 
             default:
@@ -174,6 +182,40 @@ class PaystackWebhookController extends Controller
             'po_id' => $po->id,
             'po_number' => $po->po_number,
             'transfer_reference' => $reference
+        ]);
+    }
+
+    /**
+     * Handle a successful charge on a business's dedicated virtual account
+     * (a bank transfer landing in their wallet).
+     */
+    private function handleChargeSuccess($chargeData)
+    {
+        $customerCode = $chargeData['customer']['customer_code'] ?? null;
+        $reference = $chargeData['reference'] ?? null;
+        $amountKobo = $chargeData['amount'] ?? 0;
+        $channel = $chargeData['channel'] ?? null;
+
+        if (!$customerCode || !$reference || $channel !== 'dedicated_nuban') {
+            return;
+        }
+
+        $business = Business::where('paystack_customer_code', $customerCode)->first();
+
+        if (!$business) {
+            Log::warning('Wallet funding webhook: no business found for Paystack customer', [
+                'customer_code' => $customerCode,
+                'reference' => $reference,
+            ]);
+            return;
+        }
+
+        $this->walletService->creditWallet($business, $amountKobo / 100, $reference, $channel, $chargeData);
+
+        Log::info('Wallet credited from virtual account transfer', [
+            'business_id' => $business->id,
+            'reference' => $reference,
+            'amount' => $amountKobo / 100,
         ]);
     }
 

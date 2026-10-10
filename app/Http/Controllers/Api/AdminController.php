@@ -2815,6 +2815,50 @@ public function syncInventoryProducts(\App\Services\InventorySyncService $servic
 }
 
 /**
+ * Get a business's wallet balance and virtual account (admin oversight).
+ */
+public function getBusinessWallet(\App\Models\Business $business, \App\Services\WalletService $walletService)
+{
+    $business = $walletService->ensureVirtualAccount($business);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Wallet retrieved successfully',
+        'data' => [
+            'wallet_balance' => $business->wallet_balance,
+            'virtual_account' => $business->virtual_account_number ? [
+                'account_number' => $business->virtual_account_number,
+                'bank_name' => $business->virtual_account_bank_name,
+                'account_name' => $business->virtual_account_name,
+            ] : null,
+        ],
+    ]);
+}
+
+/**
+ * Pay down a purchase order's outstanding amount from its business's
+ * wallet balance, on their behalf (partial payment if wallet can't cover it all).
+ */
+public function payPurchaseOrderFromWallet(PurchaseOrder $po, \App\Services\WalletService $walletService)
+{
+    $result = $walletService->settlePurchaseOrderFromWallet($po, 'Settled from wallet balance by admin');
+
+    if (!$result['success']) {
+        return response()->json($result, 400);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => $result['message'],
+        'data' => [
+            'amount_applied' => $result['amount_applied'],
+            'purchase_order' => $po->fresh(['vendor', 'business']),
+            'wallet_balance' => $po->business->fresh()->wallet_balance,
+        ],
+    ]);
+}
+
+/**
  * Approve a vendor
  */
 public function approveVendor(Request $request, Vendor $vendor)

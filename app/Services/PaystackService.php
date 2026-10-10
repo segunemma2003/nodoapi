@@ -164,6 +164,90 @@ class PaystackService
     }
 
     /**
+     * Create a Paystack customer, needed before a dedicated virtual account can be assigned
+     */
+    public function createCustomer($data)
+    {
+        try {
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $this->secretKey,
+                'Content-Type' => 'application/json',
+            ])->post($this->baseUrl . '/customer', $data);
+
+            $responseData = $response->json();
+
+            if ($response->successful() && $responseData['status']) {
+                return [
+                    'success' => true,
+                    'data' => $responseData['data'],
+                    'message' => $responseData['message'] ?? 'Customer created successfully'
+                ];
+            }
+
+            return [
+                'success' => false,
+                'message' => $responseData['message'] ?? 'Failed to create customer',
+                'error' => $responseData
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Paystack createCustomer failed', [
+                'data' => $data,
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Customer creation failed: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Assign a dedicated virtual account (NUBAN) to a Paystack customer, so
+     * bank transfers to it can be auto-matched to that business's wallet.
+     */
+    public function createDedicatedVirtualAccount($customerCode)
+    {
+        try {
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $this->secretKey,
+                'Content-Type' => 'application/json',
+            ])->post($this->baseUrl . '/dedicated_account', [
+                'customer' => $customerCode,
+                'preferred_bank' => config('services.paystack.dva_preferred_bank'),
+            ]);
+
+            $responseData = $response->json();
+
+            if ($response->successful() && $responseData['status']) {
+                return [
+                    'success' => true,
+                    'data' => $responseData['data'],
+                    'message' => $responseData['message'] ?? 'Dedicated virtual account created successfully'
+                ];
+            }
+
+            return [
+                'success' => false,
+                'message' => $responseData['message'] ?? 'Failed to create dedicated virtual account',
+                'error' => $responseData
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Paystack createDedicatedVirtualAccount failed', [
+                'customer_code' => $customerCode,
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Dedicated virtual account creation failed: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
      * NEW: Check transfer status and handle different states
      */
     public function getTransferStatus($transferCode)

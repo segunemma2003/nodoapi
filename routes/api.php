@@ -67,7 +67,11 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         Route::post('{po}/finalize-transfer', [AdminController::class, 'finalizePurchaseOrderTransfer']);
         Route::post('{po}/reject', [AdminController::class, 'rejectPurchaseOrder']);
         Route::put('{po}/update-status', [AdminController::class, 'updatePurchaseOrderStatus']);
+        Route::post('{po}/pay-from-wallet', [AdminController::class, 'payPurchaseOrderFromWallet']);
     });
+
+    // Settlement wallet (admin oversight, per business)
+    Route::get('businesses/{business}/wallet', [AdminController::class, 'getBusinessWallet']);
 
     // CREDIT PLAN (accounts: what's due to credit-term vendors)
     Route::get('credit-plan', [AdminController::class, 'getCreditPlan']);
@@ -196,7 +200,11 @@ Route::prefix('business')->middleware(['auth:sanctum', 'business'])->group(funct
     Route::get('purchase-orders', [BusinessController::class, 'getPurchaseOrders']);
     Route::post('purchase-orders', [BusinessController::class, 'createPurchaseOrder']);
     Route::get('purchase-orders/{po}', [BusinessController::class, 'getPurchaseOrder']);
+    Route::post('purchase-orders/{po}/pay-from-wallet', [BusinessController::class, 'payPurchaseOrderFromWallet']);
     Route::get('credit-plan', [BusinessController::class, 'getCreditPlan']);
+
+    // Settlement wallet (funded via dedicated virtual account transfers)
+    Route::get('wallet', [BusinessController::class, 'getWallet']);
 
     // Payment management
     Route::post('purchase-orders/{po}/payments', [BusinessController::class, 'submitPayment']);
