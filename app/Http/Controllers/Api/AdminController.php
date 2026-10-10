@@ -809,6 +809,9 @@ public function getPurchaseOrders(Request $request)
     if ($request->filled('high_value')) {
         $query->where('net_amount', '>=', $request->high_value);
     }
+    if ($request->filled('payment_type')) {
+        $query->where('payment_type', $request->payment_type);
+    }
 
     $purchaseOrders = $query->orderBy('created_at', 'desc')->paginate(20);
 
@@ -2586,6 +2589,71 @@ public function getVendors(Request $request)
             'approved_vendors' => Vendor::approved()->count(),
             'rejected_vendors' => Vendor::rejected()->count(),
         ]
+    ]);
+}
+
+/**
+ * Credit plan across all businesses: purchase orders owed to credit-term
+ * vendors, for accounts to monitor what's due and when.
+ */
+public function getCreditPlan(Request $request)
+{
+    $query = PurchaseOrder::creditPlan()->with(['vendor', 'business']);
+
+    if ($request->filled('business_id')) {
+        $query->where('business_id', $request->business_id);
+    }
+    if ($request->filled('overdue_only')) {
+        $query->where('due_date', '<', now());
+    }
+
+    $pos = $query->orderBy('due_date')->get();
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Credit plan retrieved successfully',
+        'data' => $pos->map(function ($po) {
+            return [
+                'id' => $po->id,
+                'po_number' => $po->po_number,
+                'business_name' => $po->business?->name,
+                'vendor_name' => $po->vendor?->name,
+                'vendor_market' => $po->vendor?->market,
+                'order_date' => $po->order_date,
+                'due_date' => $po->due_date,
+                'credit_days' => $po->credit_days,
+                'net_amount' => $po->net_amount,
+                'outstanding_amount' => $po->outstanding_amount,
+                'payment_status' => $po->payment_status,
+                'is_overdue' => $po->isOverdue(),
+                'days_overdue' => $po->getDaysOverdue(),
+            ];
+        }),
+        'summary' => [
+            'total_due' => $pos->sum('outstanding_amount'),
+            'overdue_count' => $pos->filter(fn ($po) => $po->isOverdue())->count(),
+        ],
+    ]);
+}
+
+/**
+ * Manually trigger a product/cost-price sync from newinventory.
+ */
+public function syncInventoryProducts(\App\Services\InventorySyncService $service)
+{
+    if (!$service->isConfigured()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'INVENTORY_API_URL / INVENTORY_API_KEY are not configured',
+        ], 400);
+    }
+
+    $count = $service->syncProducts();
+
+    return response()->json([
+        'success' => true,
+        'message' => "Synced {$count} products from newinventory",
+        'data' => ['synced' => $count],
     ]);
 }
 

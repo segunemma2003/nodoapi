@@ -9,6 +9,7 @@ use App\Models\Business;
 use App\Models\Payment;
 use App\Models\Vendor;
 use App\Models\PurchaseOrder;
+use App\Models\SyncedProduct;
 use App\Models\SystemSetting;
 use App\Services\PaystackService;
 use Illuminate\Http\Request;
@@ -136,6 +137,10 @@ class BusinessController extends Controller
         'phone' => 'nullable|string|max:20',
         'address' => 'nullable|string',
         'category' => 'nullable|string|max:100',
+        'market' => 'nullable|string|max:255',
+        'store_name' => 'nullable|string|max:255',
+        'payment_type' => 'nullable|in:instant,credit',
+        'credit_days' => 'nullable|integer|min:1|max:365|required_if:payment_type,credit',
         'payment_terms' => 'nullable|array',
         // NEW: Bank details validation for payments
         'account_number' => 'required|string|min:10|max:11', // Allow 10-11 digits for phone numbers
@@ -172,6 +177,10 @@ class BusinessController extends Controller
         'phone' => $request->phone,
         'address' => $request->address,
         'category' => $request->category,
+        'market' => $request->market,
+        'store_name' => $request->store_name,
+        'payment_type' => $request->payment_type ?? 'instant',
+        'credit_days' => $request->payment_type === 'credit' ? $request->credit_days : null,
         'payment_terms' => $request->payment_terms,
         'vendor_code' => Vendor::generateVendorCode($business->id),
         // NEW: Bank details
@@ -198,6 +207,57 @@ class BusinessController extends Controller
         'data' => $vendor
     ], 201);
 }
+
+    /**
+     * @OA\Put(
+     *     path="/api/business/vendors/{vendor}",
+     *     summary="Update a vendor's market/payment terms",
+     *     tags={"Business"},
+     *     security={{"sanctumAuth":{}}},
+     *     @OA\Response(response=200, description="Vendor updated successfully")
+     * )
+     */
+    public function updateVendor(Request $request, Vendor $vendor)
+    {
+        $business = Auth::user();
+        if (!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        if ($vendor->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Vendor not found'
+            ], 404);
+        }
+
+        $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'phone' => 'nullable|string|max:20',
+            'address' => 'nullable|string',
+            'category' => 'nullable|string|max:100',
+            'market' => 'nullable|string|max:255',
+            'store_name' => 'nullable|string|max:255',
+            'payment_type' => 'sometimes|in:instant,credit',
+            'credit_days' => 'nullable|integer|min:1|max:365|required_if:payment_type,credit',
+        ]);
+
+        $paymentType = $request->payment_type ?? $vendor->payment_type;
+
+        $vendor->fill($request->only(['name', 'phone', 'address', 'category', 'market', 'store_name', 'payment_type']));
+        $vendor->credit_days = $paymentType === 'credit' ? ($request->credit_days ?? $vendor->credit_days) : null;
+        $vendor->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Vendor updated successfully',
+            'data' => $vendor
+        ]);
+    }
+
     /**
      * @OA\Post(
      *     path="/api/business/purchase-orders",
@@ -233,6 +293,7 @@ class BusinessController extends Controller
         'items' => 'required|array|min:1|max:50',
         'items.*.name' => 'required|string|max:255',
         'items.*.description' => 'nullable|string|max:500',
+        'items.*.inventory_product_id' => 'nullable|integer|exists:synced_products,inventory_product_id',
         'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
         'items.*.unit_price' => 'required|numeric|min:0',
         'order_date' => 'required|date|before_or_equal:today',
@@ -242,6 +303,8 @@ class BusinessController extends Controller
         'status' => 'nullable|in:draft,pending',
         'tax_percentage' => 'nullable|numeric|min:0|max:100',
         'discount_amount' => 'nullable|numeric|min:0',
+        'payment_type' => 'nullable|in:instant,credit',
+        'credit_days' => 'nullable|integer|min:1|max:365',
     ]);
         // Verify vendor belongs to business and is approved
         $vendor = $business->vendors()->findOrFail($request->vendor_id);
@@ -261,17 +324,47 @@ class BusinessController extends Controller
 
         $status = $request->status ?? 'pending';
 
-        // Calculate totals from items
-        $items = collect($request->items)->map(function ($item) {
-        $lineTotal = $item['quantity'] * $item['unit_price'];
-        return [
-            'name' => $item['name'],
-            'description' => $item['description'] ?? '',
-            'quantity' => $item['quantity'],
-            'unit_price' => $item['unit_price'],
-            'line_total' => $lineTotal,
-        ];
-    });
+        // A PO item can never pay a vendor more than newinventory says the
+        // product should cost. Selling for less than that is fine, but we
+        // flag it so accounts can see it was a manual discount.
+        $syncedProducts = SyncedProduct::whereIn(
+            'inventory_product_id',
+            collect($request->items)->pluck('inventory_product_id')->filter()->all()
+        )->get()->keyBy('inventory_product_id');
+
+        $priceErrors = [];
+        $items = collect($request->items)->map(function ($item, $index) use ($syncedProducts, &$priceErrors) {
+            $lineTotal = $item['quantity'] * $item['unit_price'];
+            $mapped = [
+                'name' => $item['name'],
+                'description' => $item['description'] ?? '',
+                'inventory_product_id' => $item['inventory_product_id'] ?? null,
+                'quantity' => $item['quantity'],
+                'unit_price' => $item['unit_price'],
+                'line_total' => $lineTotal,
+                'price_flagged' => false,
+            ];
+
+            $synced = isset($item['inventory_product_id']) ? $syncedProducts->get($item['inventory_product_id']) : null;
+            if ($synced) {
+                $mapped['synced_price'] = (float) $synced->cost_price;
+                if ((float) $item['unit_price'] > (float) $synced->cost_price) {
+                    $priceErrors["items.{$index}.unit_price"] = "Unit price (" . $item['unit_price'] . ") exceeds the invoicing system's price for \"{$synced->product_name}\" (" . $synced->cost_price . ")";
+                } elseif ((float) $item['unit_price'] < (float) $synced->cost_price) {
+                    $mapped['price_flagged'] = true;
+                }
+            }
+
+            return $mapped;
+        });
+
+        if (!empty($priceErrors)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'One or more items are priced above the invoicing system\'s product price',
+                'errors' => $priceErrors,
+            ], 422);
+        }
 
 
         // Calculate final amounts
@@ -307,9 +400,16 @@ class BusinessController extends Controller
             }
         }
 
-        // Calculate due date
-        $paymentTermsDays = SystemSetting::getValue('default_payment_terms_days', 30);
-        $dueDate = now()->addDays($paymentTermsDays)->toDateString();
+        // Payment terms default from the vendor, but can be overridden per PO.
+        $paymentType = $request->payment_type ?? $vendor->payment_type ?? 'instant';
+        $creditDays = $paymentType === 'credit'
+            ? ($request->credit_days ?? $vendor->credit_days ?? SystemSetting::getValue('default_payment_terms_days', 30))
+            : null;
+
+        $orderDate = \Carbon\Carbon::parse($request->order_date);
+        $dueDate = $paymentType === 'credit'
+            ? $orderDate->copy()->addDays($creditDays)->toDateString()
+            : $orderDate->toDateString();
 
         try {
         // Create purchase order
@@ -317,6 +417,8 @@ class BusinessController extends Controller
             'po_number' => PurchaseOrder::generatePoNumber($business->id),
             'business_id' => $business->id,
             'vendor_id' => $vendor->id,
+            'payment_type' => $paymentType,
+            'credit_days' => $creditDays,
             'items' => $items->toArray(),
             'total_amount' => $subtotal,
             'tax_amount' => $taxAmount,
@@ -820,6 +922,10 @@ class BusinessController extends Controller
                     'address' => $vendor->address,
                     'vendor_code' => $vendor->vendor_code,
                     'category' => $vendor->category,
+                    'market' => $vendor->market,
+                    'store_name' => $vendor->store_name,
+                    'payment_type' => $vendor->payment_type,
+                    'credit_days' => $vendor->credit_days,
                     'payment_terms' => $vendor->payment_terms,
                     'is_active' => $vendor->is_active,
                     'status' => $vendor->status,
@@ -1645,6 +1751,80 @@ public function uploadLogo(Request $request)
                 ],
                 'payment_suggestions' => $po->getPaymentSuggestions(),
             ]
+        ]);
+    }
+
+    /**
+     * Search the synced newinventory product catalog, for picking a PO item's price.
+     */
+    public function getSyncedProducts(Request $request)
+    {
+        $business = Auth::user();
+        if (!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $products = SyncedProduct::active()
+            ->search($request->get('search'))
+            ->orderBy('product_name')
+            ->limit(50)
+            ->get(['id', 'inventory_product_id', 'product_name', 'sku', 'unit_of_measure', 'market_name', 'cost_price']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Synced products retrieved successfully',
+            'data' => $products,
+        ]);
+    }
+
+    /**
+     * Credit plan: purchase orders owed to credit-term vendors, for accounts
+     * to see what's due and when.
+     */
+    public function getCreditPlan(Request $request)
+    {
+        $business = Auth::user();
+        if (!$business || !($business instanceof Business)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized - Business access required'
+            ], 403);
+        }
+
+        $query = $business->purchaseOrders()->creditPlan()->with('vendor');
+
+        if ($request->get('overdue_only')) {
+            $query->where('due_date', '<', now());
+        }
+
+        $pos = $query->orderBy('due_date')->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Credit plan retrieved successfully',
+            'data' => $pos->map(function ($po) {
+                return [
+                    'id' => $po->id,
+                    'po_number' => $po->po_number,
+                    'vendor_name' => $po->vendor?->name,
+                    'vendor_market' => $po->vendor?->market,
+                    'order_date' => $po->order_date,
+                    'due_date' => $po->due_date,
+                    'credit_days' => $po->credit_days,
+                    'net_amount' => $po->net_amount,
+                    'outstanding_amount' => $po->outstanding_amount,
+                    'payment_status' => $po->payment_status,
+                    'is_overdue' => $po->isOverdue(),
+                    'days_overdue' => $po->getDaysOverdue(),
+                ];
+            }),
+            'summary' => [
+                'total_due' => $pos->sum('outstanding_amount'),
+                'overdue_count' => $pos->filter(fn ($po) => $po->isOverdue())->count(),
+            ],
         ]);
     }
 

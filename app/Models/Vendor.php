@@ -16,6 +16,10 @@ class Vendor extends Model
         'address',
         'vendor_code',
         'category',
+        'market',
+        'store_name',
+        'payment_type',
+        'credit_days',
         'payment_terms',
         'is_active',
         'business_id',
@@ -40,6 +44,7 @@ class Vendor extends Model
             'is_active' => 'boolean',
             'approved_at' => 'datetime',
             'rejected_at' => 'datetime',
+            'credit_days' => 'integer',
         ];
     }
 
@@ -88,6 +93,11 @@ class Vendor extends Model
     public function scopeRejected($query)
     {
         return $query->where('status', 'rejected');
+    }
+
+    public function isCreditVendor()
+    {
+        return $this->payment_type === 'credit';
     }
 
     // Check if vendor has complete bank details for payments

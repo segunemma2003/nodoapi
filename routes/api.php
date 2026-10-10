@@ -67,6 +67,12 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         Route::put('{po}/update-status', [AdminController::class, 'updatePurchaseOrderStatus']);
     });
 
+    // CREDIT PLAN (accounts: what's due to credit-term vendors)
+    Route::get('credit-plan', [AdminController::class, 'getCreditPlan']);
+
+    // Manually trigger a newinventory product/price sync
+    Route::post('sync-inventory-products', [AdminController::class, 'syncInventoryProducts']);
+
     // USER MANAGEMENT
     Route::prefix('users')->group(function () {
         Route::get('/', [AdminController::class, 'getUsers']);
@@ -175,15 +181,20 @@ Route::prefix('business')->middleware(['auth:sanctum', 'business'])->group(funct
     // Vendor management
     Route::get('vendors', [BusinessController::class, 'getVendors']);
     Route::post('vendors', [BusinessController::class, 'createVendor']);
+    Route::put('vendors/{vendor}', [BusinessController::class, 'updateVendor']);
     Route::delete('vendors/{vendor}', [BusinessController::class, 'deleteVendor']);
 
     // Bank verification testing
     Route::post('test-bank-verification', [BusinessController::class, 'testBankVerification']);
 
+    // Synced products from newinventory (for PO price lookups)
+    Route::get('synced-products', [BusinessController::class, 'getSyncedProducts']);
+
     // Purchase order management
     Route::get('purchase-orders', [BusinessController::class, 'getPurchaseOrders']);
     Route::post('purchase-orders', [BusinessController::class, 'createPurchaseOrder']);
     Route::get('purchase-orders/{po}', [BusinessController::class, 'getPurchaseOrder']);
+    Route::get('credit-plan', [BusinessController::class, 'getCreditPlan']);
 
     // Payment management
     Route::post('purchase-orders/{po}/payments', [BusinessController::class, 'submitPayment']);

@@ -46,4 +46,9 @@ return [
         'enabled' => env('PAYMENT_WEBHOOK_ENABLED', true),
     ],
 
+    'inventory' => [
+        'url' => env('INVENTORY_API_URL'),
+        'key' => env('INVENTORY_API_KEY'),
+    ],
+
 ];

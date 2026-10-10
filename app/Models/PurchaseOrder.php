@@ -14,6 +14,8 @@ class PurchaseOrder extends Model
         'po_number',
         'business_id',
         'vendor_id',
+        'payment_type',
+        'credit_days',
         'total_amount',
         'tax_amount',
         'discount_amount',
@@ -49,6 +51,7 @@ class PurchaseOrder extends Model
             'outstanding_amount' => 'decimal:2',
             'interest_rate' => 'decimal:2',
             'late_fee_amount' => 'decimal:2',
+            'credit_days' => 'integer',
         ];
     }
 
@@ -120,6 +123,13 @@ public function scopeFullyPaid($query)
 public function scopeOverdue($query)
 {
     return $query->where('purchase_orders.due_date', '<', now())
+                ->whereIn('purchase_orders.payment_status', ['unpaid', 'partially_paid']);
+}
+
+// Credit plan: POs owed to vendors who are giving us credit, still outstanding
+public function scopeCreditPlan($query)
+{
+    return $query->where('purchase_orders.payment_type', 'credit')
                 ->whereIn('purchase_orders.payment_status', ['unpaid', 'partially_paid']);
 }
     // Scopes
