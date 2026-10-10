@@ -21,7 +21,7 @@ namespace App\Http\Controllers;
  *     description="Local Development Server"
  * )
  * @OA\Server(
- *     url="https://nodopayapi-419811b691e7.herokuapp.com",
+ *     url="https://stark-savannah-25644-0470c62ea4b7.herokuapp.com",
  *     description="Production Server"
  * )
  * @OA\SecurityScheme(

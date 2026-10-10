@@ -70,10 +70,8 @@ class AuthController extends Controller
             ]);
         }
 
-        // Revoke existing tokens
-        $user->tokens()->delete();
-
         // Create new token with admin abilities (never expires)
+        // Note: Existing tokens are kept to allow multiple active sessions
         $tokenResult = $user->createToken('admin-token', ['admin:*']);
         $tokenResult->accessToken->expires_at = null;
         $tokenResult->accessToken->save();
@@ -126,10 +124,8 @@ class AuthController extends Controller
         // Update last login
         $business->update(['last_login_at' => now()]);
 
-        // Revoke existing tokens
-        $business->tokens()->delete();
-
         // Create new token with business abilities (never expires)
+        // Note: Existing tokens are kept to allow multiple active sessions
         $tokenResult = $business->createToken('business-token', ['business:*']);
         $tokenResult->accessToken->expires_at = null;
         $tokenResult->accessToken->save();

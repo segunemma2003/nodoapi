@@ -12,50 +12,107 @@ return new class extends Migration
      */
    public function up(): void
     {
-        Schema::table('balance_transactions', function (Blueprint $table) {
-            // Update transaction_type enum to include new types
-            DB::statement("ALTER TABLE balance_transactions MODIFY COLUMN transaction_type ENUM('credit', 'debit', 'pending', 'rejected', 'admin_assignment', 'interest_charge', 'treasury_update') NOT NULL");
+        if (Schema::hasTable('balance_transactions')) {
+            if (Schema::hasColumn('balance_transactions', 'transaction_type')) {
+                try {
+                    DB::statement("ALTER TABLE balance_transactions MODIFY COLUMN transaction_type ENUM('credit', 'debit', 'pending', 'rejected', 'admin_assignment', 'interest_charge', 'treasury_update') NOT NULL");
+                } catch (\Exception $e) {
+                    // Column might already have this enum
+                }
+            }
+            if (Schema::hasColumn('balance_transactions', 'balance_type')) {
+                try {
+                    DB::statement("ALTER TABLE balance_transactions MODIFY COLUMN balance_type ENUM('available', 'current', 'credit', 'treasury_collateral') NOT NULL");
+                } catch (\Exception $e) {
+                    // Column might already have this enum
+                }
+            }
+            if (Schema::hasColumn('balance_transactions', 'reference_type')) {
+                try {
+                    DB::statement("ALTER TABLE balance_transactions MODIFY COLUMN reference_type ENUM('purchase_order', 'payment', 'admin_assignment', 'admin_adjustment', 'interest_accrual', 'interest_charge', 'late_fee', 'treasury_management', 'withdrawal') NULL");
+                } catch (\Exception $e) {
+                    // Column might already have this enum
+                }
+            }
+        }
 
-            // Update balance_type enum for new balance types
-            DB::statement("ALTER TABLE balance_transactions MODIFY COLUMN balance_type ENUM('available', 'current', 'credit', 'treasury_collateral') NOT NULL");
+        if (Schema::hasTable('businesses')) {
+            Schema::table('businesses', function (Blueprint $table) {
+                if (!Schema::hasColumn('businesses', 'risk_tier_id')) {
+                    $table->foreignId('risk_tier_id')->nullable()->constrained('business_risk_tiers')->after('created_by');
+                }
+                if (!Schema::hasColumn('businesses', 'custom_interest_rate')) {
+                    $table->decimal('custom_interest_rate', 5, 2)->nullable()->after('risk_tier_id');
+                }
 
-            // Update reference_type enum
-            DB::statement("ALTER TABLE balance_transactions MODIFY COLUMN reference_type ENUM('purchase_order', 'payment', 'admin_assignment', 'admin_adjustment', 'interest_accrual', 'interest_charge', 'late_fee', 'treasury_management', 'withdrawal') NULL");
-        });
-
-        Schema::table('businesses', function (Blueprint $table) {
-            $table->foreignId('risk_tier_id')->nullable()->constrained('business_risk_tiers')->after('created_by');
-            $table->decimal('custom_interest_rate', 5, 2)->nullable()->after('risk_tier_id');
-
-            $table->index('risk_tier_id');
-        });
+                if (Schema::hasColumn('businesses', 'risk_tier_id')) {
+                    try {
+                        $table->index('risk_tier_id');
+                    } catch (\Exception $e) {
+                        // Index might already exist
+                    }
+                }
+            });
+        }
 
         // Update existing purchase orders
-        DB::statement('UPDATE purchase_orders SET outstanding_amount = net_amount WHERE outstanding_amount = 0');
-        DB::statement("UPDATE purchase_orders SET payment_status = 'unpaid' WHERE payment_status IS NULL");
+        if (Schema::hasTable('purchase_orders')) {
+            try {
+                DB::statement('UPDATE purchase_orders SET outstanding_amount = net_amount WHERE outstanding_amount = 0');
+                DB::statement("UPDATE purchase_orders SET payment_status = 'unpaid' WHERE payment_status IS NULL");
+            } catch (\Exception $e) {
+                // Ignore update errors
+            }
+        }
 
-        Schema::table('businesses', function (Blueprint $table) {
-            $table->enum('custom_interest_frequency', ['daily', 'weekly', 'monthly', 'quarterly', 'annual'])
-                  ->nullable()
-                  ->after('custom_interest_rate');
-            $table->timestamp('last_interest_applied_at')->nullable()->after('custom_interest_frequency');
-        });
+        if (Schema::hasTable('businesses')) {
+            Schema::table('businesses', function (Blueprint $table) {
+                if (!Schema::hasColumn('businesses', 'custom_interest_frequency')) {
+                    $table->enum('custom_interest_frequency', ['daily', 'weekly', 'monthly', 'quarterly', 'annual'])
+                          ->nullable()
+                          ->after('custom_interest_rate');
+                }
+                if (!Schema::hasColumn('businesses', 'last_interest_applied_at')) {
+                    $table->timestamp('last_interest_applied_at')->nullable()->after('custom_interest_frequency');
+                }
+            });
+        }
 
         // Add frequency fields to business_risk_tiers table
-        Schema::table('business_risk_tiers', function (Blueprint $table) {
-            $table->enum('interest_frequency', ['daily', 'weekly', 'monthly', 'quarterly', 'annual'])
-                  ->default('annual')
-                  ->after('interest_rate');
-        });
+        if (Schema::hasTable('business_risk_tiers')) {
+            Schema::table('business_risk_tiers', function (Blueprint $table) {
+                if (!Schema::hasColumn('business_risk_tiers', 'interest_frequency')) {
+                    $table->enum('interest_frequency', ['daily', 'weekly', 'monthly', 'quarterly', 'annual'])
+                          ->default('annual')
+                          ->after('interest_rate');
+                }
+            });
+        }
 
         // Add indexes for performance with custom shorter names
-        Schema::table('businesses', function (Blueprint $table) {
-            $table->index(['custom_interest_frequency', 'last_interest_applied_at'], 'businesses_interest_freq_applied_idx');
-        });
+        if (Schema::hasTable('businesses')) {
+            if (Schema::hasColumn('businesses', 'custom_interest_frequency') && Schema::hasColumn('businesses', 'last_interest_applied_at')) {
+                try {
+                    Schema::table('businesses', function (Blueprint $table) {
+                        $table->index(['custom_interest_frequency', 'last_interest_applied_at'], 'businesses_interest_freq_applied_idx');
+                    });
+                } catch (\Exception $e) {
+                    // Index might already exist
+                }
+            }
+        }
 
-        Schema::table('business_risk_tiers', function (Blueprint $table) {
-            $table->index(['interest_frequency', 'is_active'], 'risk_tiers_freq_active_idx');
-        });
+        if (Schema::hasTable('business_risk_tiers')) {
+            if (Schema::hasColumn('business_risk_tiers', 'interest_frequency') && Schema::hasColumn('business_risk_tiers', 'is_active')) {
+                try {
+                    Schema::table('business_risk_tiers', function (Blueprint $table) {
+                        $table->index(['interest_frequency', 'is_active'], 'risk_tiers_freq_active_idx');
+                    });
+                } catch (\Exception $e) {
+                    // Index might already exist
+                }
+            }
+        }
     }
 
     /**

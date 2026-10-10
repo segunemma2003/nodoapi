@@ -11,10 +11,16 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('vendors', function (Blueprint $table) {
-            // Modify bank_code field to allow up to 10 characters for fintech bank codes
-            $table->string('bank_code', 10)->nullable()->change();
-        });
+        if (Schema::hasTable('vendors') && Schema::hasColumn('vendors', 'bank_code')) {
+            Schema::table('vendors', function (Blueprint $table) {
+                // Modify bank_code field to allow up to 10 characters for fintech bank codes
+                try {
+                    $table->string('bank_code', 10)->nullable()->change();
+                } catch (\Exception $e) {
+                    // Column might already have this length
+                }
+            });
+        }
     }
 
     /**

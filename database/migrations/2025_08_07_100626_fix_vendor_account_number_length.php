@@ -11,10 +11,16 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('vendors', function (Blueprint $table) {
-            // Increase account_number field length to accommodate 10-11 digit account numbers
-            $table->string('account_number', 15)->nullable()->change();
-        });
+        if (Schema::hasTable('vendors') && Schema::hasColumn('vendors', 'account_number')) {
+            Schema::table('vendors', function (Blueprint $table) {
+                // Increase account_number field length to accommodate 10-11 digit account numbers
+                try {
+                    $table->string('account_number', 15)->nullable()->change();
+                } catch (\Exception $e) {
+                    // Column might already have this length
+                }
+            });
+        }
     }
 
     /**

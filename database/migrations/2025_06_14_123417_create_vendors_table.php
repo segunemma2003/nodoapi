@@ -11,25 +11,27 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('vendors', function (Blueprint $table) {
-           $table->id();
-            $table->string('name');
-            $table->string('email')->unique();
-            $table->string('phone')->nullable();
-            $table->text('address')->nullable();
-            $table->string('vendor_code')->unique();
-            $table->string('category')->nullable();
-            $table->json('payment_terms')->nullable();
-            $table->boolean('is_active')->default(true);
-            $table->foreignId('business_id')->constrained('businesses')->onDelete('cascade');
-            $table->timestamps();
+        if (!Schema::hasTable('vendors')) {
+            Schema::create('vendors', function (Blueprint $table) {
+               $table->id();
+                $table->string('name');
+                $table->string('email')->unique();
+                $table->string('phone')->nullable();
+                $table->text('address')->nullable();
+                $table->string('vendor_code')->unique();
+                $table->string('category')->nullable();
+                $table->json('payment_terms')->nullable();
+                $table->boolean('is_active')->default(true);
+                $table->foreignId('business_id')->constrained('businesses')->onDelete('cascade');
+                $table->timestamps();
 
-            // Performance indexes
-            $table->index(['business_id', 'is_active']);
-            $table->index('vendor_code');
-            $table->index(['email', 'business_id']);
-            $table->index('category');
-        });
+                // Performance indexes
+                $table->index(['business_id', 'is_active']);
+                $table->index('vendor_code');
+                $table->index(['email', 'business_id']);
+                $table->index('category');
+            });
+        }
     }
 
     /**
