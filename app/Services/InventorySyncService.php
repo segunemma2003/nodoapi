@@ -38,6 +38,8 @@ class InventorySyncService
             return 0;
         }
 
+        $this->deduplicateByName();
+
         $synced = 0;
         $skip = 0;
         $limit = 200;
@@ -76,14 +78,52 @@ class InventorySyncService
         return $synced;
     }
 
+    /**
+     * Collapse any rows left over from before name-based matching (or any
+     * future drift) down to one per product name — keeping whichever was
+     * synced most recently. Safe to run every time: existing POs only ever
+     * read their own saved item snapshot, never this table, so deleting a
+     * duplicate row here can't affect anything already created.
+     */
+    protected function deduplicateByName(): void
+    {
+        $duplicateNames = SyncedProduct::select('product_name')
+            ->groupBy('product_name')
+            ->havingRaw('COUNT(*) > 1')
+            ->pluck('product_name');
+
+        foreach ($duplicateNames as $name) {
+            $rows = SyncedProduct::where('product_name', $name)
+                ->orderByDesc('last_synced_at')
+                ->orderByDesc('id')
+                ->get();
+
+            $rows->skip(1)->each(fn ($row) => $row->delete());
+        }
+    }
+
+    /**
+     * newinventory can list the same product name more than once (e.g. one
+     * row per market), each with its own id and price. We only need one
+     * local row per name — matching here by name (not inventory_product_id)
+     * means a product that reappears under a different id just gets its
+     * price refreshed on the same row instead of creating a duplicate.
+     * Existing POs are unaffected either way: their items are a saved
+     * snapshot, never a live reference back into this table.
+     */
     protected function upsertProduct(array $item): void
     {
         $costPriceKobo = $item['current_cost_price'] ?? null;
+        $name = trim($item['product_name'] ?? '');
+
+        if ($name === '') {
+            return;
+        }
 
         SyncedProduct::updateOrCreate(
-            ['inventory_product_id' => $item['id']],
+            ['product_name' => $name],
             [
-                'product_name' => $item['product_name'] ?? '',
+                'inventory_product_id' => $item['id'],
                 'sku' => $item['sku'] ?? null,
                 'category' => $item['category']['name'] ?? null,
                 'unit_of_measure' => $item['unit_of_measure'] ?? null,
