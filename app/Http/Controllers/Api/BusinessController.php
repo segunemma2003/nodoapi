@@ -137,9 +137,9 @@ class BusinessController extends Controller
         'phone' => 'nullable|string|max:20',
         'address' => 'nullable|string',
         'category' => 'nullable|string|max:100',
-        'market' => 'nullable|string|max:255',
+        'market' => 'required|string|max:255',
         'store_name' => 'nullable|string|max:255',
-        'payment_type' => 'nullable|in:instant,credit',
+        'payment_type' => 'required|in:instant,credit',
         'credit_days' => 'nullable|integer|min:1|max:365|required_if:payment_type,credit',
         'payment_terms' => 'nullable|array',
         // NEW: Bank details validation for payments
@@ -239,9 +239,9 @@ class BusinessController extends Controller
             'phone' => 'nullable|string|max:20',
             'address' => 'nullable|string',
             'category' => 'nullable|string|max:100',
-            'market' => 'nullable|string|max:255',
+            'market' => 'required|string|max:255',
             'store_name' => 'nullable|string|max:255',
-            'payment_type' => 'sometimes|in:instant,credit',
+            'payment_type' => 'required|in:instant,credit',
             'credit_days' => 'nullable|integer|min:1|max:365|required_if:payment_type,credit',
         ]);
 
@@ -293,7 +293,7 @@ class BusinessController extends Controller
         'items' => 'required|array|min:1|max:50',
         'items.*.name' => 'required|string|max:255',
         'items.*.description' => 'nullable|string|max:500',
-        'items.*.inventory_product_id' => 'nullable|integer|exists:synced_products,inventory_product_id',
+        'items.*.inventory_product_id' => 'required|integer|exists:synced_products,inventory_product_id',
         'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
         'items.*.unit_price' => 'required|numeric|min:0',
         'order_date' => 'required|date|before_or_equal:today',
@@ -302,7 +302,6 @@ class BusinessController extends Controller
         'notes' => 'nullable|string|max:1000',
         'status' => 'nullable|in:draft,pending',
         'tax_percentage' => 'nullable|numeric|min:0|max:100',
-        'discount_amount' => 'nullable|numeric|min:0',
         'payment_type' => 'nullable|in:instant,credit',
         'credit_days' => 'nullable|integer|min:1|max:365',
     ]);
@@ -324,9 +323,11 @@ class BusinessController extends Controller
 
         $status = $request->status ?? 'pending';
 
-        // A PO item can never pay a vendor more than newinventory says the
-        // product should cost. Selling for less than that is fine, but we
-        // flag it so accounts can see it was a manual discount.
+        // Every item must be matched to a real newinventory product, and can
+        // never be priced above what that product costs there. Selling for
+        // less is fine, but it's flagged so accounts can see it was a manual
+        // discount. There is no separate PO-level discount: any reduction in
+        // what a vendor is owed has to show up per-item, against a real price.
         $syncedProducts = SyncedProduct::whereIn(
             'inventory_product_id',
             collect($request->items)->pluck('inventory_product_id')->filter()->all()
@@ -338,21 +339,24 @@ class BusinessController extends Controller
             $mapped = [
                 'name' => $item['name'],
                 'description' => $item['description'] ?? '',
-                'inventory_product_id' => $item['inventory_product_id'] ?? null,
+                'inventory_product_id' => $item['inventory_product_id'],
                 'quantity' => $item['quantity'],
                 'unit_price' => $item['unit_price'],
                 'line_total' => $lineTotal,
                 'price_flagged' => false,
             ];
 
-            $synced = isset($item['inventory_product_id']) ? $syncedProducts->get($item['inventory_product_id']) : null;
-            if ($synced) {
-                $mapped['synced_price'] = (float) $synced->cost_price;
-                if ((float) $item['unit_price'] > (float) $synced->cost_price) {
-                    $priceErrors["items.{$index}.unit_price"] = "Unit price (" . $item['unit_price'] . ") exceeds the invoicing system's price for \"{$synced->product_name}\" (" . $synced->cost_price . ")";
-                } elseif ((float) $item['unit_price'] < (float) $synced->cost_price) {
-                    $mapped['price_flagged'] = true;
-                }
+            $synced = $syncedProducts->get($item['inventory_product_id']);
+            if (!$synced) {
+                $priceErrors["items.{$index}.inventory_product_id"] = "Could not find this product in the invoicing system's synced catalog.";
+                return $mapped;
+            }
+
+            $mapped['synced_price'] = (float) $synced->cost_price;
+            if ((float) $item['unit_price'] > (float) $synced->cost_price) {
+                $priceErrors["items.{$index}.unit_price"] = "Unit price (" . $item['unit_price'] . ") exceeds the invoicing system's price for \"{$synced->product_name}\" (" . $synced->cost_price . ")";
+            } elseif ((float) $item['unit_price'] < (float) $synced->cost_price) {
+                $mapped['price_flagged'] = true;
             }
 
             return $mapped;
@@ -366,23 +370,11 @@ class BusinessController extends Controller
             ], 422);
         }
 
-
-        // Calculate final amounts
-         $subtotal = $items->sum('line_total');
-          $taxAmount = ($request->tax_percentage ?? 0) / 100 * $subtotal;
-    $discountAmount = $request->discount_amount ?? 0;
-    $netAmount = $subtotal + $taxAmount - $discountAmount;
-        // $totalAmount = $calculatedTotal;
-        // $taxAmount = $request->tax_amount ?? 0;
-        // $discountAmount = $request->discount_amount ?? 0;
-        // $netAmount = $totalAmount + $taxAmount - $discountAmount;
-
-        // if ($netAmount <= 0) {
-        //     return response()->json([
-        //         'success' => false,
-        //         'message' => 'Net amount must be greater than zero'
-        //     ], 400);
-        // }
+        // Calculate final amounts — no discount: it was an avenue for
+        // under-reporting what's actually owed to a vendor.
+        $subtotal = $items->sum('line_total');
+        $taxAmount = ($request->tax_percentage ?? 0) / 100 * $subtotal;
+        $netAmount = $subtotal + $taxAmount;
 
         // Check available spending power for pending orders
         if ($status === 'pending') {
@@ -422,7 +414,6 @@ class BusinessController extends Controller
             'items' => $items->toArray(),
             'total_amount' => $subtotal,
             'tax_amount' => $taxAmount,
-            'discount_amount' => $discountAmount,
             'net_amount' => $netAmount,
             'outstanding_amount' => $netAmount,
             'payment_status' => 'unpaid',
