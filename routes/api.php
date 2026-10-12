@@ -195,6 +195,7 @@ Route::prefix('business')->middleware(['auth:sanctum', 'business'])->group(funct
 
     // Synced products from newinventory (for PO price lookups)
     Route::get('synced-products', [BusinessController::class, 'getSyncedProducts']);
+    Route::get('synced-markets', [BusinessController::class, 'getSyncedMarkets']);
 
     // Purchase order management
     Route::get('purchase-orders', [BusinessController::class, 'getPurchaseOrders']);

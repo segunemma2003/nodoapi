@@ -1758,9 +1758,22 @@ public function uploadLogo(Request $request)
             ], 403);
         }
 
-        $products = SyncedProduct::active()
-            ->search($request->get('search'))
-            ->orderBy('product_name')
+        $query = SyncedProduct::active()
+            ->search($request->get('search'));
+
+        // A vendor only sells what their market has — results default to
+        // their market so the price shown is always the one that applies
+        // to them, not whichever market happened to sync last.
+        $market = $request->get('market');
+        if (!$market && $request->filled('vendor_id')) {
+            $vendor = $business->vendors()->find($request->get('vendor_id'));
+            $market = $vendor?->market;
+        }
+        if ($market) {
+            $query->where('market_name', $market);
+        }
+
+        $products = $query->orderBy('product_name')
             ->limit(50)
             ->get(['id', 'inventory_product_id', 'product_name', 'sku', 'unit_of_measure', 'market_name', 'cost_price']);
 
@@ -1768,6 +1781,26 @@ public function uploadLogo(Request $request)
             'success' => true,
             'message' => 'Synced products retrieved successfully',
             'data' => $products,
+        ]);
+    }
+
+    /**
+     * Distinct markets present in the synced invoicing-system catalog, so
+     * vendor market can be picked from a list that actually matches what's
+     * sold there (needed for the product filter above to work).
+     */
+    public function getSyncedMarkets()
+    {
+        $markets = SyncedProduct::active()
+            ->whereNotNull('market_name')
+            ->distinct()
+            ->orderBy('market_name')
+            ->pluck('market_name');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Markets retrieved successfully',
+            'data' => $markets,
         ]);
     }
 

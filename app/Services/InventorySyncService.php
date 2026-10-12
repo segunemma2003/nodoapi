@@ -38,7 +38,7 @@ class InventorySyncService
             return 0;
         }
 
-        $this->deduplicateByName();
+        $this->deduplicateByNameAndMarket();
 
         $synced = 0;
         $skip = 0;
@@ -79,21 +79,29 @@ class InventorySyncService
     }
 
     /**
-     * Collapse any rows left over from before name-based matching (or any
-     * future drift) down to one per product name — keeping whichever was
-     * synced most recently. Safe to run every time: existing POs only ever
-     * read their own saved item snapshot, never this table, so deleting a
-     * duplicate row here can't affect anything already created.
+     * Collapse any rows left over from before this matching scheme (or any
+     * future drift) down to one per (product_name, market_id) pair —
+     * keeping whichever was synced most recently. A product genuinely sold
+     * in several markets keeps one row per market, since the price (and
+     * what a vendor in that market should be charging) differs by market.
+     * Safe to run every time: existing POs only ever read their own saved
+     * item snapshot, never this table, so deleting a duplicate row here
+     * can't affect anything already created.
      */
-    protected function deduplicateByName(): void
+    protected function deduplicateByNameAndMarket(): void
     {
-        $duplicateNames = SyncedProduct::select('product_name')
-            ->groupBy('product_name')
+        $duplicateGroups = SyncedProduct::select('product_name', 'market_id')
+            ->groupBy('product_name', 'market_id')
             ->havingRaw('COUNT(*) > 1')
-            ->pluck('product_name');
+            ->get();
 
-        foreach ($duplicateNames as $name) {
-            $rows = SyncedProduct::where('product_name', $name)
+        foreach ($duplicateGroups as $group) {
+            $rows = SyncedProduct::where('product_name', $group->product_name)
+                ->where(function ($q) use ($group) {
+                    $group->market_id === null
+                        ? $q->whereNull('market_id')
+                        : $q->where('market_id', $group->market_id);
+                })
                 ->orderByDesc('last_synced_at')
                 ->orderByDesc('id')
                 ->get();
@@ -103,31 +111,33 @@ class InventorySyncService
     }
 
     /**
-     * newinventory can list the same product name more than once (e.g. one
-     * row per market), each with its own id and price. We only need one
-     * local row per name — matching here by name (not inventory_product_id)
-     * means a product that reappears under a different id just gets its
-     * price refreshed on the same row instead of creating a duplicate.
-     * Existing POs are unaffected either way: their items are a saved
-     * snapshot, never a live reference back into this table.
+     * newinventory can reassign a product's id over time (e.g. re-listing
+     * it) while its name and market stay the same. Matching on
+     * (product_name, market_id) instead of inventory_product_id means that
+     * just refreshes the existing row's price instead of creating a
+     * duplicate — while still keeping genuinely different markets as
+     * separate rows, since the same product name can have a different real
+     * price in each market. Existing POs are unaffected either way: their
+     * items are a saved snapshot, never a live reference back into this
+     * table.
      */
     protected function upsertProduct(array $item): void
     {
         $costPriceKobo = $item['current_cost_price'] ?? null;
         $name = trim($item['product_name'] ?? '');
+        $marketId = $item['market_id'] ?? null;
 
         if ($name === '') {
             return;
         }
 
         SyncedProduct::updateOrCreate(
-            ['product_name' => $name],
+            ['product_name' => $name, 'market_id' => $marketId],
             [
                 'inventory_product_id' => $item['id'],
                 'sku' => $item['sku'] ?? null,
                 'category' => $item['category']['name'] ?? null,
                 'unit_of_measure' => $item['unit_of_measure'] ?? null,
-                'market_id' => $item['market_id'] ?? null,
                 'market_name' => $item['market_name'] ?? null,
                 'cost_price' => $costPriceKobo !== null ? $costPriceKobo / 100 : 0,
                 'cost_price_effective_date' => $item['cost_price_effective_date'] ?? null,
