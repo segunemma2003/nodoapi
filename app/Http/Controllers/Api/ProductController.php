@@ -255,11 +255,19 @@ class ProductController extends Controller
             ], 403);
         }
 
+        // A product with the same name for this business is treated as the
+        // same product re-entered — update it in place instead of creating
+        // a duplicate row with its own stale price.
+        $existing = Product::where('business_id', $business->id)
+            ->whereRaw('LOWER(name) = ?', [strtolower(trim($request->name))])
+            ->first();
+        $ignoreId = $existing->id ?? 'NULL';
+
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
-            'sku' => 'nullable|string|max:255|unique:products,sku,NULL,id,business_id,' . $business->id,
-            'barcode' => 'nullable|string|max:255|unique:products,barcode,NULL,id,business_id,' . $business->id,
+            'sku' => 'nullable|string|max:255|unique:products,sku,' . $ignoreId . ',id,business_id,' . $business->id,
+            'barcode' => 'nullable|string|max:255|unique:products,barcode,' . $ignoreId . ',id,business_id,' . $business->id,
             'price' => 'required|numeric|min:0.01',
             'cost_price' => 'nullable|numeric|min:0',
             'quantity' => 'nullable|integer|min:0',
@@ -279,9 +287,8 @@ class ProductController extends Controller
             ], 422);
         }
 
-        $product = Product::create([
-            'business_id' => $business->id,
-            'name' => $request->name,
+        $attributes = [
+            'name' => trim($request->name),
             'description' => $request->description,
             'sku' => $request->sku,
             'barcode' => $request->barcode,
@@ -294,7 +301,19 @@ class ProductController extends Controller
             'image_url' => $request->image_url,
             'is_active' => $request->is_active ?? true,
             'attributes' => $request->attributes,
-        ]);
+        ];
+
+        if ($existing) {
+            $existing->update($attributes);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'A product named "' . $request->name . '" already existed — its price and details were updated instead of creating a duplicate',
+                'data' => $existing->fresh(),
+            ]);
+        }
+
+        $product = Product::create(array_merge(['business_id' => $business->id], $attributes));
 
         return response()->json([
             'success' => true,
@@ -509,25 +528,34 @@ class ProductController extends Controller
         }
 
         $created = [];
+        $updated = [];
         $failed = [];
         $skipped = [];
 
         DB::beginTransaction();
         try {
             foreach ($request->products as $index => $productData) {
-                // Check for duplicate SKU or barcode within the same business
+                // A product with the same name is the same product
+                // re-entered — update it instead of creating a duplicate.
+                $existingByName = Product::where('business_id', $business->id)
+                    ->whereRaw('LOWER(name) = ?', [strtolower(trim($productData['name']))])
+                    ->first();
+
+                // Check for duplicate SKU or barcode on a *different* product
                 $existingSku = null;
                 $existingBarcode = null;
 
                 if (!empty($productData['sku'])) {
                     $existingSku = Product::where('business_id', $business->id)
                         ->where('sku', $productData['sku'])
+                        ->when($existingByName, fn ($q) => $q->where('id', '!=', $existingByName->id))
                         ->first();
                 }
 
                 if (!empty($productData['barcode'])) {
                     $existingBarcode = Product::where('business_id', $business->id)
                         ->where('barcode', $productData['barcode'])
+                        ->when($existingByName, fn ($q) => $q->where('id', '!=', $existingByName->id))
                         ->first();
                 }
 
@@ -540,29 +568,38 @@ class ProductController extends Controller
                     continue;
                 }
 
-                try {
-                    $product = Product::create([
-                        'business_id' => $business->id,
-                        'name' => $productData['name'],
-                        'description' => $productData['description'] ?? null,
-                        'sku' => $productData['sku'] ?? null,
-                        'barcode' => $productData['barcode'] ?? null,
-                        'price' => $productData['price'],
-                        'cost_price' => $productData['cost_price'] ?? null,
-                        'quantity' => $productData['quantity'] ?? 0,
-                        'min_stock_level' => $productData['min_stock_level'] ?? 0,
-                        'category' => $productData['category'] ?? null,
-                        'unit' => $productData['unit'] ?? null,
-                        'image_url' => $productData['image_url'] ?? null,
-                        'is_active' => $productData['is_active'] ?? true,
-                        'attributes' => $productData['attributes'] ?? null,
-                    ]);
+                $attributes = [
+                    'name' => trim($productData['name']),
+                    'description' => $productData['description'] ?? null,
+                    'sku' => $productData['sku'] ?? null,
+                    'barcode' => $productData['barcode'] ?? null,
+                    'price' => $productData['price'],
+                    'cost_price' => $productData['cost_price'] ?? null,
+                    'quantity' => $productData['quantity'] ?? 0,
+                    'min_stock_level' => $productData['min_stock_level'] ?? 0,
+                    'category' => $productData['category'] ?? null,
+                    'unit' => $productData['unit'] ?? null,
+                    'image_url' => $productData['image_url'] ?? null,
+                    'is_active' => $productData['is_active'] ?? true,
+                    'attributes' => $productData['attributes'] ?? null,
+                ];
 
-                    $created[] = [
-                        'id' => $product->id,
-                        'name' => $product->name,
-                        'sku' => $product->sku,
-                    ];
+                try {
+                    if ($existingByName) {
+                        $existingByName->update($attributes);
+                        $updated[] = [
+                            'id' => $existingByName->id,
+                            'name' => $existingByName->name,
+                            'sku' => $existingByName->sku,
+                        ];
+                    } else {
+                        $product = Product::create(array_merge(['business_id' => $business->id], $attributes));
+                        $created[] = [
+                            'id' => $product->id,
+                            'name' => $product->name,
+                            'sku' => $product->sku,
+                        ];
+                    }
                 } catch (\Exception $e) {
                     $failed[] = [
                         'index' => $index,
@@ -577,16 +614,19 @@ class ProductController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => sprintf(
-                    'Bulk creation completed: %d created, %d skipped, %d failed',
+                    'Bulk upload completed: %d created, %d updated (matched by name), %d skipped, %d failed',
                     count($created),
+                    count($updated),
                     count($skipped),
                     count($failed)
                 ),
                 'data' => [
                     'created_count' => count($created),
+                    'updated_count' => count($updated),
                     'skipped_count' => count($skipped),
                     'failed_count' => count($failed),
                     'created' => $created,
+                    'updated' => $updated,
                     'skipped' => $skipped,
                     'failed' => $failed,
                 ]
