@@ -65,8 +65,19 @@ class InventorySyncService
             $items = is_array($body) && array_is_list($body) ? $body : ($body['items'] ?? []);
 
             foreach ($items as $item) {
-                $this->upsertProduct($item);
-                $synced++;
+                try {
+                    $this->upsertProduct($item);
+                    $synced++;
+                } catch (\Throwable $e) {
+                    // One malformed/conflicting record (e.g. bad data in
+                    // newinventory, or an id reused under a different name)
+                    // must not abort the sync for every other product.
+                    Log::error('InventorySyncService: skipped a product that failed to sync', [
+                        'item_id' => $item['id'] ?? null,
+                        'product_name' => $item['product_name'] ?? null,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
 
             if (count($items) < $limit) {
@@ -127,7 +138,11 @@ class InventorySyncService
         $name = trim($item['product_name'] ?? '');
         $marketId = $item['market_id'] ?? null;
 
-        if ($name === '') {
+        if ($name === '' || ctype_digit($name)) {
+            Log::warning('InventorySyncService: skipped a product with a missing/numeric-only name', [
+                'item_id' => $item['id'] ?? null,
+                'product_name' => $item['product_name'] ?? null,
+            ]);
             return;
         }
 
