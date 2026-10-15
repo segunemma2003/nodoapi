@@ -27,6 +27,69 @@ class InventorySyncService
         return $this->baseUrl !== '' && $this->apiKey !== '';
     }
 
+    /** @var array<string,int>|null */
+    protected ?array $marketIdsByName = null;
+
+    /** @var array<string,int>|null */
+    protected ?array $categoryIdsByName = null;
+
+    /**
+     * newinventory's product search only takes market_id/category_id, not
+     * names -- resolve the name to an id so filtering happens server-side
+     * (before the result limit is applied) instead of discarding most of a
+     * market's catalog by filtering a small globally-limited page in PHP.
+     */
+    protected function resolveMarketId(?string $marketName): ?int
+    {
+        if ($marketName === null) {
+            return null;
+        }
+
+        if ($this->marketIdsByName === null) {
+            $this->marketIdsByName = $this->fetchNameToIdMap('/api/v1/products/markets');
+        }
+
+        return $this->marketIdsByName[$marketName] ?? null;
+    }
+
+    protected function resolveCategoryId(?string $categoryName): ?int
+    {
+        if ($categoryName === null) {
+            return null;
+        }
+
+        if ($this->categoryIdsByName === null) {
+            $this->categoryIdsByName = $this->fetchNameToIdMap('/api/v1/products/categories');
+        }
+
+        return $this->categoryIdsByName[$categoryName] ?? null;
+    }
+
+    /**
+     * @return array<string,int>
+     */
+    protected function fetchNameToIdMap(string $path): array
+    {
+        try {
+            $response = Http::withToken($this->apiKey)->timeout(8)->get("{$this->baseUrl}{$path}");
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        if (!$response->successful()) {
+            return [];
+        }
+
+        $map = [];
+        foreach ($response->json() ?? [] as $entry) {
+            if (!empty($entry['name']) && isset($entry['id'])) {
+                $map[$entry['name']] = $entry['id'];
+            }
+        }
+
+        return $map;
+    }
+
     /**
      * Fetch every active product from newinventory and upsert it locally.
      * Returns the number of products synced.
@@ -104,14 +167,19 @@ class InventorySyncService
             return null;
         }
 
+        $marketId = $this->resolveMarketId($marketName);
+        $categoryId = $this->resolveCategoryId($categoryName);
+
         try {
             $response = Http::withToken($this->apiKey)
                 ->timeout(8)
                 ->get("{$this->baseUrl}/api/v1/products", array_filter([
                     'search' => $search,
+                    'market_id' => $marketId,
+                    'category_id' => $categoryId,
                     'is_active' => true,
-                    'limit' => 50,
-                ]));
+                    'limit' => 100,
+                ], fn ($v) => $v !== null && $v !== ''));
         } catch (\Throwable $e) {
             Log::warning('InventorySyncService: live search failed, caller should fall back to cache', [
                 'error' => $e->getMessage(),
@@ -132,11 +200,15 @@ class InventorySyncService
             if ($name === '' || ctype_digit($name)) {
                 continue;
             }
-            if ($marketName !== null && ($item['market_name'] ?? null) !== $marketName) {
+            // newinventory already filtered by market_id/category_id above --
+            // this is just a safety net in case a name couldn't be resolved
+            // to an id (e.g. the vendor's market doesn't exactly match any
+            // newinventory market name).
+            if ($marketId === null && $marketName !== null && ($item['market_name'] ?? null) !== $marketName) {
                 continue;
             }
             $category = $item['category']['name'] ?? null;
-            if ($categoryName !== null && $category !== $categoryName) {
+            if ($categoryId === null && $categoryName !== null && $category !== $categoryName) {
                 continue;
             }
             $costPriceKobo = $item['current_cost_price'] ?? null;
