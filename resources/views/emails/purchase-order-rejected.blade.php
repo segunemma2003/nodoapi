@@ -18,7 +18,7 @@ We regret to inform you that a purchase order has been rejected.
 | Item | Description | Quantity | Unit Price | Total |
 |:-----|:------------|:---------|:-----------|:------|
 @foreach($items as $item)
-| {{ $item['name'] }} | {{ $item['description'] ?? 'N/A' }} | {{ $item['quantity'] }} | ₦{{ number_format($item['unit_price'], 2) }} | ₦{{ number_format($item['total_price'], 2) }} |
+| {{ $item['name'] }} | {{ $item['description'] ?? 'N/A' }} | {{ $item['quantity'] }} | ₦{{ number_format($item['unit_price'], 2) }} | ₦{{ number_format($item['line_total'], 2) }} |
 @endforeach
 @endcomponent
 @endif
