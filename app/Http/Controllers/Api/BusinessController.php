@@ -1786,7 +1786,8 @@ public function uploadLogo(Request $request)
         // there shows up here immediately rather than waiting on the next
         // background sync. Only fall back to the cached table (which can be
         // a few minutes stale) if newinventory can't be reached right now.
-        $live = app(InventorySyncService::class)->searchLive($request->get('search'), $market);
+        $category = $request->get('category');
+        $live = app(InventorySyncService::class)->searchLive($request->get('search'), $market, $category);
 
         if ($live !== null) {
             $products = collect($live)
@@ -1806,10 +1807,13 @@ public function uploadLogo(Request $request)
         if ($market) {
             $query->where('market_name', $market);
         }
+        if ($category) {
+            $query->where('category', $category);
+        }
 
         $products = $query->orderBy('product_name')
             ->limit(50)
-            ->get(['id', 'inventory_product_id', 'product_name', 'sku', 'unit_of_measure', 'market_name', 'cost_price']);
+            ->get(['id', 'inventory_product_id', 'product_name', 'sku', 'unit_of_measure', 'market_name', 'category', 'cost_price']);
 
         return response()->json([
             'success' => true,
@@ -1839,6 +1843,30 @@ public function uploadLogo(Request $request)
             'success' => true,
             'message' => 'Markets retrieved successfully',
             'data' => $markets,
+        ]);
+    }
+
+    /**
+     * Distinct categories present in the synced invoicing-system catalog, so
+     * the product filter can mirror the category filter the invoicing app
+     * itself offers.
+     */
+    public function getSyncedCategories()
+    {
+        $categories = app(InventorySyncService::class)->listCategoriesLive();
+
+        if ($categories === null) {
+            $categories = SyncedProduct::active()
+                ->whereNotNull('category')
+                ->distinct()
+                ->orderBy('category')
+                ->pluck('category');
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Categories retrieved successfully',
+            'data' => $categories,
         ]);
     }
 

@@ -96,9 +96,9 @@ class InventorySyncService
      * sync happens to run. Returns null (never throws) if newinventory can't
      * be reached right now, so callers can fall back to the cached table.
      *
-     * @return array<int, array{inventory_product_id:int,product_name:string,sku:?string,unit_of_measure:?string,market_name:?string,cost_price:float}>|null
+     * @return array<int, array{inventory_product_id:int,product_name:string,sku:?string,unit_of_measure:?string,market_name:?string,category:?string,cost_price:float}>|null
      */
-    public function searchLive(?string $search, ?string $marketName): ?array
+    public function searchLive(?string $search, ?string $marketName, ?string $categoryName = null): ?array
     {
         if (!$this->isConfigured()) {
             return null;
@@ -135,6 +135,10 @@ class InventorySyncService
             if ($marketName !== null && ($item['market_name'] ?? null) !== $marketName) {
                 continue;
             }
+            $category = $item['category']['name'] ?? null;
+            if ($categoryName !== null && $category !== $categoryName) {
+                continue;
+            }
             $costPriceKobo = $item['current_cost_price'] ?? null;
             $results[] = [
                 'inventory_product_id' => $item['id'],
@@ -142,6 +146,7 @@ class InventorySyncService
                 'sku' => $item['sku'] ?? null,
                 'unit_of_measure' => $item['unit_of_measure'] ?? null,
                 'market_name' => $item['market_name'] ?? null,
+                'category' => $category,
                 'cost_price' => $costPriceKobo !== null ? $costPriceKobo / 100 : 0,
             ];
         }
@@ -186,6 +191,42 @@ class InventorySyncService
             ->all();
 
         return $markets;
+    }
+
+    /**
+     * The active category names newinventory currently has, live. Returns
+     * null (never throws) if newinventory can't be reached.
+     *
+     * @return array<int, string>|null
+     */
+    public function listCategoriesLive(): ?array
+    {
+        if (!$this->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $response = Http::withToken($this->apiKey)
+                ->timeout(8)
+                ->get("{$this->baseUrl}/api/v1/products/categories");
+        } catch (\Throwable $e) {
+            Log::warning('InventorySyncService: live category list failed, caller should fall back to cache', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        if (!$response->successful()) {
+            return null;
+        }
+
+        return collect($response->json())
+            ->filter(fn ($c) => ($c['is_active'] ?? true) && !empty($c['name']))
+            ->pluck('name')
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
     }
 
     /**
