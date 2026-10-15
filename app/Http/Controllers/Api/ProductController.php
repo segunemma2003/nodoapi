@@ -136,6 +136,7 @@ class ProductController extends Controller
                 'quantity' => $product->quantity,
                 'min_stock_level' => $product->min_stock_level,
                 'category' => $product->category,
+                'market' => $product->market,
                 'unit' => $product->unit,
                 'image_url' => $product->image_url,
                 'is_active' => $product->is_active,
@@ -202,6 +203,7 @@ class ProductController extends Controller
                 'quantity' => $product->quantity,
                 'min_stock_level' => $product->min_stock_level,
                 'category' => $product->category,
+                'market' => $product->market,
                 'unit' => $product->unit,
                 'image_url' => $product->image_url,
                 'is_active' => $product->is_active,
@@ -273,6 +275,7 @@ class ProductController extends Controller
             'quantity' => 'nullable|integer|min:0',
             'min_stock_level' => 'nullable|integer|min:0',
             'category' => 'nullable|string|max:255',
+            'market' => 'nullable|string|max:255',
             'unit' => 'nullable|string|max:50',
             'image_url' => 'nullable|url|max:500',
             'is_active' => 'nullable|boolean',
@@ -297,6 +300,7 @@ class ProductController extends Controller
             'quantity' => $request->quantity ?? 0,
             'min_stock_level' => $request->min_stock_level ?? 0,
             'category' => $request->category,
+            'market' => $request->market,
             'unit' => $request->unit,
             'image_url' => $request->image_url,
             'is_active' => $request->is_active ?? true,
@@ -380,6 +384,7 @@ class ProductController extends Controller
             'quantity' => 'nullable|integer|min:0',
             'min_stock_level' => 'nullable|integer|min:0',
             'category' => 'nullable|string|max:255',
+            'market' => 'nullable|string|max:255',
             'unit' => 'nullable|string|max:50',
             'image_url' => 'nullable|url|max:500',
             'is_active' => 'nullable|boolean',
@@ -396,7 +401,7 @@ class ProductController extends Controller
 
         $product->update($request->only([
             'name', 'description', 'sku', 'barcode', 'price', 'cost_price',
-            'quantity', 'min_stock_level', 'category', 'unit', 'image_url',
+            'quantity', 'min_stock_level', 'category', 'market', 'unit', 'image_url',
             'is_active', 'attributes'
         ]));
 
@@ -513,6 +518,7 @@ class ProductController extends Controller
             'products.*.quantity' => 'nullable|integer|min:0',
             'products.*.min_stock_level' => 'nullable|integer|min:0',
             'products.*.category' => 'nullable|string|max:255',
+            'products.*.market' => 'nullable|string|max:255',
             'products.*.unit' => 'nullable|string|max:50',
             'products.*.image_url' => 'nullable|url|max:500',
             'products.*.is_active' => 'nullable|boolean',
@@ -578,6 +584,7 @@ class ProductController extends Controller
                     'quantity' => $productData['quantity'] ?? 0,
                     'min_stock_level' => $productData['min_stock_level'] ?? 0,
                     'category' => $productData['category'] ?? null,
+                    'market' => $productData['market'] ?? null,
                     'unit' => $productData['unit'] ?? null,
                     'image_url' => $productData['image_url'] ?? null,
                     'is_active' => $productData['is_active'] ?? true,

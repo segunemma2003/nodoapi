@@ -20,6 +20,7 @@ class Product extends Model
         'quantity',
         'min_stock_level',
         'category',
+        'market',
         'unit',
         'image_url',
         'is_active',
