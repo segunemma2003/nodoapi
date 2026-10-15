@@ -89,6 +89,16 @@ class ProductController extends Controller
 
         $query = Product::where('business_id', $business->id);
 
+        // Only show products that actually exist in the invoicing system
+        // catalog, for now -- hides local entries that were never matched
+        // there (e.g. the old price=1000 placeholder rows) rather than
+        // showing items whose price/unit/market can't be verified.
+        $query->whereIn(DB::raw('LOWER(TRIM(name))'), function ($sub) {
+            $sub->select(DB::raw('LOWER(TRIM(product_name))'))
+                ->from('synced_products')
+                ->where('is_active', true);
+        });
+
         // Search filter
         if ($request->has('search') && $request->search) {
             $search = $request->search;
