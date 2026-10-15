@@ -153,6 +153,73 @@ class InventorySyncService
     }
 
     /**
+     * Fetch specific products by id, live, keyed by inventory_product_id.
+     * Used to validate/price a PO's items against newinventory directly --
+     * the picker now shows live search results, so validating against the
+     * (slower-to-update) synced_products cache alone could reject an item
+     * the business just picked from a correctly-loaded dropdown. Returns
+     * null (never throws) if newinventory can't be reached, so the caller
+     * can fall back to the cache.
+     *
+     * @param array<int, int> $inventoryProductIds
+     * @return array<int, array{inventory_product_id:int,product_name:string,sku:?string,unit_of_measure:?string,market_name:?string,category:?string,cost_price:float}>|null
+     */
+    public function getByIdsLive(array $inventoryProductIds): ?array
+    {
+        $ids = array_values(array_unique(array_filter($inventoryProductIds)));
+
+        if (empty($ids)) {
+            return [];
+        }
+
+        if (!$this->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $responses = Http::pool(fn ($pool) => array_map(
+                fn ($id) => $pool->as((string) $id)
+                    ->withToken($this->apiKey)
+                    ->timeout(8)
+                    ->get("{$this->baseUrl}/api/v1/products/{$id}"),
+                $ids
+            ));
+        } catch (\Throwable $e) {
+            Log::warning('InventorySyncService: live by-id lookup failed, caller should fall back to cache', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $results = [];
+        foreach ($ids as $id) {
+            $response = $responses[(string) $id] ?? null;
+            if (!$response || $response instanceof \Throwable || !$response->successful()) {
+                continue;
+            }
+
+            $item = $response->json();
+            $name = trim($item['product_name'] ?? '');
+            if ($name === '') {
+                continue;
+            }
+
+            $costPriceKobo = $item['current_cost_price'] ?? null;
+            $results[$id] = [
+                'inventory_product_id' => $item['id'],
+                'product_name' => $name,
+                'sku' => $item['sku'] ?? null,
+                'unit_of_measure' => $item['unit_of_measure'] ?? null,
+                'market_name' => $item['market_name'] ?? null,
+                'category' => $item['category']['name'] ?? null,
+                'cost_price' => $costPriceKobo !== null ? $costPriceKobo / 100 : 0,
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
      * Search newinventory live, bypassing the cache entirely, so a price,
      * unit of measure, or market change there shows up on FS Pay the moment
      * someone searches for the product -- not whenever the next background

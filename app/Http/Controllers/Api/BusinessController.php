@@ -294,7 +294,12 @@ class BusinessController extends Controller
         'items' => 'required|array|min:1|max:50',
         'items.*.name' => 'required|string|max:255',
         'items.*.description' => 'nullable|string|max:500',
-        'items.*.inventory_product_id' => 'required|integer|exists:synced_products,inventory_product_id',
+        // Not checked against the synced_products cache here -- the picker
+        // shows live newinventory results, which can be ahead of that cache,
+        // so an id that's genuinely valid there could otherwise get rejected.
+        // Verified for real against newinventory (falling back to the cache)
+        // further down instead.
+        'items.*.inventory_product_id' => 'required|integer',
         'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
         'items.*.unit_price' => 'required|numeric|min:0',
         'order_date' => 'required|date|before_or_equal:today',
@@ -329,10 +334,20 @@ class BusinessController extends Controller
         // less is fine, but it's flagged so accounts can see it was a manual
         // discount. There is no separate PO-level discount: any reduction in
         // what a vendor is owed has to show up per-item, against a real price.
-        $syncedProducts = SyncedProduct::whereIn(
-            'inventory_product_id',
-            collect($request->items)->pluck('inventory_product_id')->filter()->all()
-        )->get()->keyBy('inventory_product_id');
+        //
+        // Checked live first (the product picker shows live results, so an
+        // id the business just picked could be ahead of the cache) and only
+        // falls back to the cached table if newinventory can't be reached.
+        $requestedIds = collect($request->items)->pluck('inventory_product_id')->filter()->all();
+        $liveProducts = app(InventorySyncService::class)->getByIdsLive($requestedIds);
+
+        if ($liveProducts !== null) {
+            $syncedProducts = collect($liveProducts)->map(fn ($p) => (object) $p);
+        } else {
+            $syncedProducts = SyncedProduct::whereIn('inventory_product_id', $requestedIds)
+                ->get()
+                ->keyBy('inventory_product_id');
+        }
 
         $priceErrors = [];
         $items = collect($request->items)->map(function ($item, $index) use ($syncedProducts, &$priceErrors) {
@@ -349,7 +364,7 @@ class BusinessController extends Controller
 
             $synced = $syncedProducts->get($item['inventory_product_id']);
             if (!$synced) {
-                $priceErrors["items.{$index}.inventory_product_id"] = "Could not find this product in the invoicing system's synced catalog.";
+                $priceErrors["items.{$index}.inventory_product_id"] = "Could not find this product in the invoicing system's catalog.";
                 return $mapped;
             }
 
