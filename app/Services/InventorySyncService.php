@@ -90,6 +90,66 @@ class InventorySyncService
     }
 
     /**
+     * Search newinventory live, bypassing the cache entirely, so a price,
+     * unit of measure, or market change there shows up on FS Pay the moment
+     * someone searches for the product -- not whenever the next background
+     * sync happens to run. Returns null (never throws) if newinventory can't
+     * be reached right now, so callers can fall back to the cached table.
+     *
+     * @return array<int, array{inventory_product_id:int,product_name:string,sku:?string,unit_of_measure:?string,market_name:?string,cost_price:float}>|null
+     */
+    public function searchLive(?string $search, ?string $marketName): ?array
+    {
+        if (!$this->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $response = Http::withToken($this->apiKey)
+                ->timeout(8)
+                ->get("{$this->baseUrl}/api/v1/products", array_filter([
+                    'search' => $search,
+                    'is_active' => true,
+                    'limit' => 50,
+                ]));
+        } catch (\Throwable $e) {
+            Log::warning('InventorySyncService: live search failed, caller should fall back to cache', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        if (!$response->successful()) {
+            return null;
+        }
+
+        $body = $response->json();
+        $items = is_array($body) && array_is_list($body) ? $body : ($body['items'] ?? []);
+
+        $results = [];
+        foreach ($items as $item) {
+            $name = trim($item['product_name'] ?? '');
+            if ($name === '' || ctype_digit($name)) {
+                continue;
+            }
+            if ($marketName !== null && ($item['market_name'] ?? null) !== $marketName) {
+                continue;
+            }
+            $costPriceKobo = $item['current_cost_price'] ?? null;
+            $results[] = [
+                'inventory_product_id' => $item['id'],
+                'product_name' => $name,
+                'sku' => $item['sku'] ?? null,
+                'unit_of_measure' => $item['unit_of_measure'] ?? null,
+                'market_name' => $item['market_name'] ?? null,
+                'cost_price' => $costPriceKobo !== null ? $costPriceKobo / 100 : 0,
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
      * Collapse any rows left over from before this matching scheme (or any
      * future drift) down to one per (product_name, market_id) pair —
      * keeping whichever was synced most recently. A product genuinely sold

@@ -12,6 +12,7 @@ use App\Models\PurchaseOrder;
 use App\Models\SyncedProduct;
 use App\Models\SystemSetting;
 use App\Services\PaystackService;
+use App\Services\InventorySyncService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -1758,9 +1759,6 @@ public function uploadLogo(Request $request)
             ], 403);
         }
 
-        $query = SyncedProduct::active()
-            ->search($request->get('search'));
-
         // A vendor only sells what their market has — results default to
         // their market so the price shown is always the one that applies
         // to them, not whichever market happened to sync last.
@@ -1769,6 +1767,28 @@ public function uploadLogo(Request $request)
             $vendor = $business->vendors()->find($request->get('vendor_id'));
             $market = $vendor?->market;
         }
+
+        // Query newinventory live first so a price, unit, or market change
+        // there shows up here immediately rather than waiting on the next
+        // background sync. Only fall back to the cached table (which can be
+        // a few minutes stale) if newinventory can't be reached right now.
+        $live = app(InventorySyncService::class)->searchLive($request->get('search'), $market);
+
+        if ($live !== null) {
+            $products = collect($live)
+                ->sortBy('product_name')
+                ->values()
+                ->take(50);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Synced products retrieved successfully',
+                'data' => $products,
+            ]);
+        }
+
+        $query = SyncedProduct::active()
+            ->search($request->get('search'));
         if ($market) {
             $query->where('market_name', $market);
         }
