@@ -886,7 +886,7 @@ class BusinessController extends Controller
      *     @OA\Response(response=200, description="Vendors retrieved")
      * )
      */
-    public function getVendors()
+    public function getVendors(Request $request)
     {
         $business = Auth::user();
         if(!$business || !($business instanceof Business)) {
@@ -896,11 +896,25 @@ class BusinessController extends Controller
             ], 403);
         }
 
-        $vendors = $business->vendors()
+        $query = $business->vendors()
             ->withCount('purchaseOrders')
-            ->with(['approvedBy', 'rejectedBy'])
-            ->orderBy('created_at', 'desc')
-            ->get();
+            ->with(['approvedBy', 'rejectedBy']);
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%")
+                  ->orWhere('phone', 'like', "%{$search}%")
+                  ->orWhere('store_name', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->filled('market')) {
+            $query->where('market', $request->market);
+        }
+
+        $vendors = $query->orderBy('created_at', 'desc')->get();
 
         return response()->json([
             'success' => true,

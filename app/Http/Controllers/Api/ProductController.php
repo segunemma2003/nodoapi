@@ -104,6 +104,11 @@ class ProductController extends Controller
             $query->where('category', $request->category);
         }
 
+        // Market filter
+        if ($request->has('market') && $request->market) {
+            $query->where('market', $request->market);
+        }
+
         // Active status filter
         if ($request->has('is_active')) {
             $query->where('is_active', filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN));
