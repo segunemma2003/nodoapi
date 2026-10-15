@@ -1811,11 +1811,15 @@ public function uploadLogo(Request $request)
      */
     public function getSyncedMarkets()
     {
-        $markets = SyncedProduct::active()
-            ->whereNotNull('market_name')
-            ->distinct()
-            ->orderBy('market_name')
-            ->pluck('market_name');
+        $markets = app(InventorySyncService::class)->listMarketsLive();
+
+        if ($markets === null) {
+            $markets = SyncedProduct::active()
+                ->whereNotNull('market_name')
+                ->distinct()
+                ->orderBy('market_name')
+                ->pluck('market_name');
+        }
 
         return response()->json([
             'success' => true,

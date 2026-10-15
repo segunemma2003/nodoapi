@@ -150,6 +150,45 @@ class InventorySyncService
     }
 
     /**
+     * The active market names newinventory currently has, live -- not
+     * whatever happened to exist in the cache as of the last sync. Returns
+     * null (never throws) if newinventory can't be reached.
+     *
+     * @return array<int, string>|null
+     */
+    public function listMarketsLive(): ?array
+    {
+        if (!$this->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $response = Http::withToken($this->apiKey)
+                ->timeout(8)
+                ->get("{$this->baseUrl}/api/v1/products/markets");
+        } catch (\Throwable $e) {
+            Log::warning('InventorySyncService: live market list failed, caller should fall back to cache', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        if (!$response->successful()) {
+            return null;
+        }
+
+        $markets = collect($response->json())
+            ->filter(fn ($m) => ($m['is_active'] ?? true) && !empty($m['name']))
+            ->pluck('name')
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        return $markets;
+    }
+
+    /**
      * Collapse any rows left over from before this matching scheme (or any
      * future drift) down to one per (product_name, market_id) pair —
      * keeping whichever was synced most recently. A product genuinely sold
