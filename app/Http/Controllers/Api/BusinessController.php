@@ -2008,7 +2008,7 @@ public function uploadLogo(Request $request)
             // Get admin email from system settings or use default
             $adminEmail = SystemSetting::getValue('admin_notification_email', 'support@foodstuff.store');
 
-            Mail::queue([$adminEmail, 'segunemma2003@gmail.com', 'diana.tenebe@foodstuff.store', 'boma.dokubo@foodstuff.store','operations@foodstuff.store'])->send(new PurchaseOrderCreated($purchaseOrder));
+            Mail::queue([$adminEmail, 'segunemma2003@gmail.com', 'diana.tenebe@foodstuff.store', 'boma.dokubo@foodstuff.store','operations@foodstuff.store', 'sales@foodstuff.store'])->send(new PurchaseOrderCreated($purchaseOrder));
 
             Log::info('Admin notified of pending purchase order', [
                 'po_id' => $purchaseOrder->id,
@@ -2031,7 +2031,7 @@ public function uploadLogo(Request $request)
             // Get admin email from system settings or use default
             $adminEmail = SystemSetting::getValue('admin_notification_email', 'support@foodstuff.store');
 
-            Mail::queue([$adminEmail, 'segunemma2003@gmail.com', 'diana.tenebe@foodstuff.store', 'boma.dokubo@foodstuff.store','operations@foodstuff.store'])->send(new VendorCreated($vendor));
+            Mail::queue([$adminEmail, 'segunemma2003@gmail.com', 'diana.tenebe@foodstuff.store', 'boma.dokubo@foodstuff.store','operations@foodstuff.store', 'sales@foodstuff.store'])->send(new VendorCreated($vendor));
 
             Log::info('Admin notified of new vendor', [
                 'vendor_id' => $vendor->id,

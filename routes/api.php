@@ -29,85 +29,107 @@ Route::prefix('auth')->group(function () {
 
 // Admin routes
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
-    // Dashboard and basic admin functions
+    // Dashboard and profile — every admin role can see their own
     Route::get('dashboard', [AdminController::class, 'dashboard']);
-    Route::post('businesses', [AdminController::class, 'createBusiness']);
-
-    // ADMIN PROFILE MANAGEMENT (NEW)
     Route::get('profile', [AdminController::class, 'getAdminProfile']);
     Route::put('profile', [AdminController::class, 'updateAdminProfile']);
 
-    // Payment management
-    Route::get('payments/pending', [AdminController::class, 'getPendingPayments']);
-    Route::post('payments/{payment}/approve', [AdminController::class, 'approvePayment']);
-    Route::post('payments/{payment}/reject', [AdminController::class, 'rejectPayment']);
+    // BUSINESSES, VENDORS, PURCHASE-ORDER APPROVAL, SYNC — super_admin/admin only
+    Route::middleware('role:admin')->group(function () {
+        Route::post('businesses', [AdminController::class, 'createBusiness']);
+        Route::get('businesses', [AdminController::class, 'getBusinessesEnhanced']);
+        Route::get('businesses/{business}', [AdminController::class, 'getBusinessDetails']);
+        Route::post('businesses/{business}/adjust-credit', [AdminController::class, 'adjustAssignedCredit']);
 
-    // Business credit management
-    Route::get('businesses', [AdminController::class, 'getBusinessesEnhanced']);
-    Route::get('businesses/{business}', [AdminController::class, 'getBusinessDetails']);
-    Route::post('businesses/{business}/adjust-credit', [AdminController::class, 'adjustAssignedCredit']);
+        Route::prefix('vendors')->group(function () {
+            Route::get('/', [AdminController::class, 'getVendors']);
+            Route::get('{vendor}', [AdminController::class, 'getVendorDetails']);
+            Route::post('{vendor}/approve', [AdminController::class, 'approveVendor']);
+            Route::post('{vendor}/reject', [AdminController::class, 'rejectVendor']);
+        });
 
-    // VENDOR MANAGEMENT
-    Route::prefix('vendors')->group(function () {
-        Route::get('/', [AdminController::class, 'getVendors']);
-        Route::get('{vendor}', [AdminController::class, 'getVendorDetails']);
-        Route::post('{vendor}/approve', [AdminController::class, 'approveVendor']);
-        Route::post('{vendor}/reject', [AdminController::class, 'rejectVendor']);
+        Route::get('test-paystack', [AdminController::class, 'testPaystackService']);
+        Route::post('test-po-approval', [AdminController::class, 'testPurchaseOrderApproval']);
+
+        Route::prefix('purchase-orders')->group(function () {
+            Route::get('/', [AdminController::class, 'getPurchaseOrders']);
+            Route::get('{po}', [AdminController::class, 'getPurchaseOrderDetails']);
+            Route::post('{po}/approve', [AdminController::class, 'approvePurchaseOrder']);
+            Route::post('{po}/finalize-transfer', [AdminController::class, 'finalizePurchaseOrderTransfer']);
+            Route::post('{po}/reject', [AdminController::class, 'rejectPurchaseOrder']);
+            Route::put('{po}/update-status', [AdminController::class, 'updatePurchaseOrderStatus']);
+            Route::post('{po}/pay-from-wallet', [AdminController::class, 'payPurchaseOrderFromWallet']);
+        });
+
+        Route::post('sync-inventory-products', [AdminController::class, 'syncInventoryProducts']);
     });
 
-    // TESTING ENDPOINTS
-    Route::get('test-paystack', [AdminController::class, 'testPaystackService']);
-    Route::post('test-po-approval', [AdminController::class, 'testPurchaseOrderApproval']);
-
-    // PURCHASE ORDERS MANAGEMENT
-    Route::prefix('purchase-orders')->group(function () {
-        Route::get('/', [AdminController::class, 'getPurchaseOrders']);
-        Route::get('{po}', [AdminController::class, 'getPurchaseOrderDetails']);
-        Route::post('{po}/approve', [AdminController::class, 'approvePurchaseOrder']);
-        Route::post('{po}/finalize-transfer', [AdminController::class, 'finalizePurchaseOrderTransfer']);
-        Route::post('{po}/reject', [AdminController::class, 'rejectPurchaseOrder']);
-        Route::put('{po}/update-status', [AdminController::class, 'updatePurchaseOrderStatus']);
-        Route::post('{po}/pay-from-wallet', [AdminController::class, 'payPurchaseOrderFromWallet']);
-    });
-
-    // Settlement wallet (admin oversight, per business)
-    Route::get('businesses/{business}/wallet', [AdminController::class, 'getBusinessWallet']);
-
-    // CREDIT PLAN (accounts: what's due to credit-term vendors)
-    Route::get('credit-plan', [AdminController::class, 'getCreditPlan']);
-
-    // Manually trigger a newinventory product/price sync
-    Route::post('sync-inventory-products', [AdminController::class, 'syncInventoryProducts']);
-
-    // USER MANAGEMENT
-    Route::prefix('users')->group(function () {
+    // USER MANAGEMENT — super_admin only
+    Route::middleware('role')->prefix('users')->group(function () {
         Route::get('/', [AdminController::class, 'getUsers']);
         Route::post('/', [AdminController::class, 'createUser']);
         Route::put('{user}', [AdminController::class, 'updateUser']);
         Route::delete('{user}', [AdminController::class, 'deleteUser']);
     });
 
-    // PAYMENT HISTORY & TRANSACTIONS
-    Route::prefix('payments')->group(function () {
-        Route::get('pending', [AdminController::class, 'getPendingPayments']);
-        Route::get('history', [AdminController::class, 'getPaymentHistory']);
-        Route::post('{payment}/approve', [AdminController::class, 'approvePayment']);
-        Route::post('{payment}/reject', [AdminController::class, 'rejectPayment']);
+    // PAYMENTS, TRANSACTIONS, REPAYMENTS, WALLET, CREDIT, TREASURY, INTEREST — super_admin/admin/finance_admin
+    Route::middleware('role:admin,finance_admin')->group(function () {
+        Route::prefix('payments')->group(function () {
+            Route::get('pending', [AdminController::class, 'getPendingPayments']);
+            Route::get('history', [AdminController::class, 'getPaymentHistory']);
+            Route::post('{payment}/approve', [AdminController::class, 'approvePayment']);
+            Route::post('{payment}/reject', [AdminController::class, 'rejectPayment']);
+        });
+
+        Route::prefix('transactions')->group(function () {
+            Route::get('recent', [AdminController::class, 'getRecentTransactions']);
+        });
+
+        Route::prefix('businesses/{business}/repayments')->group(function () {
+            Route::get('/', [AdminController::class, 'getBusinessRepayments']);
+            Route::post('{payment}/approve', [AdminController::class, 'approveBusinessRepayment']);
+            Route::post('{payment}/reject', [AdminController::class, 'rejectBusinessRepayment']);
+        });
+
+        Route::get('businesses/{business}/wallet', [AdminController::class, 'getBusinessWallet']);
+        Route::get('credit-plan', [AdminController::class, 'getCreditPlan']);
+
+        Route::post('businesses/{business}/apply-interest', [AdminController::class, 'applyInterest']);
+        Route::post('bulk-interest-application', [AdminController::class, 'bulkApplyInterest']);
+
+        Route::post('businesses/{business}/treasury/update', [AdminController::class, 'updateTreasury']);
+
+        Route::prefix('interest-rates')->group(function () {
+            Route::get('frequencies', [AdminInterestRateController::class, 'getAvailableFrequencies']);
+            Route::get('comparison', [AdminInterestRateController::class, 'getInterestRateComparison']);
+            Route::post('update-with-frequency', [AdminInterestRateController::class, 'updateInterestRateWithFrequency']);
+            Route::post('bulk-apply/{frequency}', [AdminInterestRateController::class, 'bulkApplyInterestByFrequency']);
+        });
+
+        Route::prefix('businesses/{business}')->group(function () {
+            Route::post('set-interest-rate', [AdminInterestRateController::class, 'setBusinessInterestRate']);
+        });
+
+        Route::get('platform-summary', [AdminController::class, 'getPlatformSummary']);
     });
 
-    Route::prefix('transactions')->group(function () {
-        Route::get('recent', [AdminController::class, 'getRecentTransactions']);
+    // RISK TIERS & SYSTEM SETTINGS — super_admin only (platform config)
+    Route::middleware('role')->group(function () {
+        Route::prefix('risk-tiers')->group(function () {
+            Route::get('/', [AdminInterestRateController::class, 'getRiskTiers']);
+            Route::post('/', [AdminInterestRateController::class, 'createRiskTier']);
+            Route::put('{tier}', [AdminInterestRateController::class, 'updateRiskTier']);
+            Route::delete('{tier}', [AdminInterestRateController::class, 'deleteRiskTier']);
+        });
+
+        Route::prefix('system-settings')->group(function () {
+            Route::get('/', [AdminInterestRateController::class, 'getSystemSettings']);
+            Route::put('/', [AdminInterestRateController::class, 'updateSystemSettings']);
+        });
     });
 
-    // BUSINESS REPAYMENTS
-    Route::prefix('businesses/{business}/repayments')->group(function () {
-        Route::get('/', [AdminController::class, 'getBusinessRepayments']);
-        Route::post('{payment}/approve', [AdminController::class, 'approveBusinessRepayment']);
-        Route::post('{payment}/reject', [AdminController::class, 'rejectBusinessRepayment']);
-    });
-
-    // SUPPORT TICKET MANAGEMENT
-    Route::prefix('support')->group(function () {
+    // SUPPORT TICKET MANAGEMENT — super_admin/admin/support_admin
+    Route::middleware('role:admin,support_admin')->prefix('support')->group(function () {
         // Ticket management
         Route::get('tickets', [AdminSupportController::class, 'getTickets']);
         Route::get('tickets/{ticket}', [AdminSupportController::class, 'getTicketDetails']);
@@ -127,45 +149,6 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         Route::post('bulk/close', [AdminSupportController::class, 'bulkCloseTickets']);
         Route::post('bulk/update-priority', [AdminSupportController::class, 'bulkUpdatePriority']);
     });
-
-    // Interest application
-    Route::post('businesses/{business}/apply-interest', [AdminController::class, 'applyInterest']);
-    Route::post('bulk-interest-application', [AdminController::class, 'bulkApplyInterest']);
-
-    // Treasury management
-    Route::post('businesses/{business}/treasury/update', [AdminController::class, 'updateTreasury']);
-
-    // ENHANCED INTEREST RATE FREQUENCY MANAGEMENT
-    Route::prefix('interest-rates')->group(function () {
-        Route::get('frequencies', [AdminInterestRateController::class, 'getAvailableFrequencies']);
-        Route::get('comparison', [AdminInterestRateController::class, 'getInterestRateComparison']);
-        Route::post('update-with-frequency', [AdminInterestRateController::class, 'updateInterestRateWithFrequency']);
-        Route::post('bulk-apply/{frequency}', [AdminInterestRateController::class, 'bulkApplyInterestByFrequency']);
-    });
-
-    // Risk Tier Management
-    Route::prefix('risk-tiers')->group(function () {
-        Route::get('/', [AdminInterestRateController::class, 'getRiskTiers']);
-        Route::post('/', [AdminInterestRateController::class, 'createRiskTier']);
-        Route::put('{tier}', [AdminInterestRateController::class, 'updateRiskTier']);
-        Route::delete('{tier}', [AdminInterestRateController::class, 'deleteRiskTier']);
-    });
-
-    // Business-specific interest rate management
-    Route::prefix('businesses/{business}')->group(function () {
-        Route::post('set-interest-rate', [AdminInterestRateController::class, 'setBusinessInterestRate']);
-    });
-
-    // System settings
-    Route::get('platform-summary', [AdminController::class, 'getPlatformSummary']);
-
-    Route::prefix('system-settings')->group(function () {
-        Route::get('/', [AdminInterestRateController::class, 'getSystemSettings']);
-        Route::put('/', [AdminInterestRateController::class, 'updateSystemSettings']);
-    });
-
-
-
 });
 
 // Business routes

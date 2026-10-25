@@ -2162,7 +2162,7 @@ public function createUser(Request $request)
         'email' => 'required|email|unique:users,email',
         'password' => 'required|string|min:8',
         'user_type' => 'required|in:admin,business',
-        'role' => 'required|in:super_admin,admin,business',
+        'role' => 'required|in:super_admin,admin,support_admin,finance_admin',
         'is_active' => 'boolean',
     ]);
 
@@ -2207,7 +2207,7 @@ public function updateUser(Request $request, User $user)
         'email' => 'email|unique:users,email,' . $user->id,
         'password' => 'nullable|string|min:8',
         'user_type' => 'in:admin,business',
-        'role' => 'in:super_admin,admin,business',
+        'role' => 'in:super_admin,admin,support_admin,finance_admin',
         'is_active' => 'boolean',
     ]);
 

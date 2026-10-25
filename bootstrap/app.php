@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
             'business' => \App\Http\Middleware\BusinessMiddleware::class,
             'auth.token' => \App\Http\Middleware\EnsureTokenIsValid::class,
+            'role' => \App\Http\Middleware\RoleMiddleware::class,
         ]);
 
         // Global middleware
