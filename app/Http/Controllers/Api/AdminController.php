@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\Business;
+use App\Models\BusinessStaff;
 use App\Models\PurchaseOrder;
 use App\Models\Payment;
 use App\Models\Vendor;
@@ -439,6 +440,111 @@ class AdminController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * List the staff logins attached to a business.
+     */
+    public function getBusinessStaff(Business $business)
+    {
+        return response()->json([
+            'success' => true,
+            'message' => 'Business staff retrieved successfully',
+            'data' => $business->staffAccounts()->orderBy('created_at', 'desc')->get(),
+        ]);
+    }
+
+    /**
+     * Create a staff login for a business. Staff share the business's
+     * dashboard (vendors, products, purchase orders, credit plan) — see
+     * App\Support\BusinessContext.
+     */
+    public function createBusinessStaff(Request $request, Business $business)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:business_staff,email',
+            'password' => 'required|string|min:8',
+            'is_active' => 'boolean',
+        ]);
+
+        try {
+            $staff = $business->staffAccounts()->create([
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => $request->password,
+                'is_active' => $request->is_active ?? true,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Business staff account created successfully',
+                'data' => $staff,
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create business staff account',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function updateBusinessStaff(Request $request, Business $business, BusinessStaff $staff)
+    {
+        if ($staff->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Staff account does not belong to this business',
+            ], 404);
+        }
+
+        $request->validate([
+            'name' => 'string|max:255',
+            'email' => 'email|unique:business_staff,email,' . $staff->id,
+            'password' => 'nullable|string|min:8',
+            'is_active' => 'boolean',
+        ]);
+
+        try {
+            $updateData = $request->only(['name', 'email', 'is_active']);
+
+            if ($request->filled('password')) {
+                $updateData['password'] = $request->password;
+            }
+
+            $staff->update($updateData);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Business staff account updated successfully',
+                'data' => $staff->fresh(),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update business staff account',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function deleteBusinessStaff(Business $business, BusinessStaff $staff)
+    {
+        if ($staff->business_id !== $business->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Staff account does not belong to this business',
+            ], 404);
+        }
+
+        $staffName = $staff->name;
+        $staff->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => "Staff account '{$staffName}' deleted successfully",
+        ]);
     }
 
     /**

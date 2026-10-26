@@ -41,6 +41,14 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
         Route::get('businesses/{business}', [AdminController::class, 'getBusinessDetails']);
         Route::post('businesses/{business}/adjust-credit', [AdminController::class, 'adjustAssignedCredit']);
 
+        // BUSINESS STAFF — extra logins that act on the same business's dashboard
+        Route::prefix('businesses/{business}/staff')->group(function () {
+            Route::get('/', [AdminController::class, 'getBusinessStaff']);
+            Route::post('/', [AdminController::class, 'createBusinessStaff']);
+            Route::put('{staff}', [AdminController::class, 'updateBusinessStaff']);
+            Route::delete('{staff}', [AdminController::class, 'deleteBusinessStaff']);
+        });
+
         Route::prefix('vendors')->group(function () {
             Route::get('/', [AdminController::class, 'getVendors']);
             Route::get('{vendor}', [AdminController::class, 'getVendorDetails']);

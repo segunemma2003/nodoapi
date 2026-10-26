@@ -99,6 +99,11 @@ class Business extends Authenticatable
         return $this->hasMany(Product::class);
     }
 
+    public function staffAccounts()
+    {
+        return $this->hasMany(BusinessStaff::class);
+    }
+
     // FIXED: Direct payments relationship - avoid hasManyThrough ambiguity
     public function directPayments()
     {

@@ -18,7 +18,7 @@ class BusinessSupportController extends Controller
      */
     public function getMyTickets(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !$business  instanceof Business) {
             return response()->json([
                 'success' => false,
@@ -58,7 +58,7 @@ class BusinessSupportController extends Controller
      */
     public function getTicketDetails(SupportTicket $ticket)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
 
         if (!$business || !$business  instanceof Business) {
             return response()->json([
@@ -88,7 +88,7 @@ class BusinessSupportController extends Controller
      */
     public function createTicket(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
 
         $request->validate([
             'title' => 'required|string|max:255',
@@ -148,7 +148,7 @@ class BusinessSupportController extends Controller
      */
     public function addResponse(Request $request, SupportTicket $ticket)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
 
         if ($ticket->business_id !== $business->id) {
             return response()->json([
@@ -214,7 +214,7 @@ class BusinessSupportController extends Controller
      */
     public function closeTicket(Request $request, SupportTicket $ticket)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
 
         if ($ticket->business_id !== $business->id) {
             return response()->json([

@@ -79,7 +79,7 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -194,7 +194,7 @@ class ProductController extends Controller
      */
     public function show($id)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -264,7 +264,7 @@ class ProductController extends Controller
      */
     public function store(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -379,7 +379,7 @@ class ProductController extends Controller
      */
     public function update(Request $request, $id)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -447,7 +447,7 @@ class ProductController extends Controller
      */
     public function destroy($id)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -514,7 +514,7 @@ class ProductController extends Controller
      */
     public function bulkCreate(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -678,7 +678,7 @@ class ProductController extends Controller
      */
     public function getCategories()
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -714,7 +714,7 @@ class ProductController extends Controller
      */
     public function getStats()
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,

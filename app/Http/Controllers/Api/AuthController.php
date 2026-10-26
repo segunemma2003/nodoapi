@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\Business;
+use App\Models\BusinessStaff;
 use App\Models\Payment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -115,31 +116,54 @@ class AuthController extends Controller
 
         $business = Business::where('email', $request->email)->where('is_active', true)->first();
 
-        if (!$business || !Hash::check($request->password, $business->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
+        if ($business && Hash::check($request->password, $business->password)) {
+            // Update last login
+            $business->update(['last_login_at' => now()]);
+
+            // Create new token with business abilities (never expires)
+            // Note: Existing tokens are kept to allow multiple active sessions
+            $tokenResult = $business->createToken('business-token', ['business:*']);
+            $tokenResult->accessToken->expires_at = null;
+            $tokenResult->accessToken->save();
+            $token = $tokenResult->plainTextToken;
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Login successful',
+                'data' => [
+                    'user' => $business,
+                    'token' => $token,
+                    'token_type' => 'Bearer',
+                    'abilities' => ['business:*']
+                ]
             ]);
         }
 
-        // Update last login
-        $business->update(['last_login_at' => now()]);
+        // Not the business's own login — check if it's one of its staff logins
+        $staff = BusinessStaff::where('email', $request->email)->where('is_active', true)->first();
 
-        // Create new token with business abilities (never expires)
-        // Note: Existing tokens are kept to allow multiple active sessions
-        $tokenResult = $business->createToken('business-token', ['business:*']);
-        $tokenResult->accessToken->expires_at = null;
-        $tokenResult->accessToken->save();
-        $token = $tokenResult->plainTextToken;
+        if ($staff && Hash::check($request->password, $staff->password) && $staff->business && $staff->business->is_active) {
+            $staff->update(['last_login_at' => now()]);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Login successful',
-            'data' => [
-                'user' => $business,
-                'token' => $token,
-                'token_type' => 'Bearer',
-                'abilities' => ['business:*']
-            ]
+            $tokenResult = $staff->createToken('business-staff-token', ['business:*']);
+            $tokenResult->accessToken->expires_at = null;
+            $tokenResult->accessToken->save();
+            $token = $tokenResult->plainTextToken;
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Login successful',
+                'data' => [
+                    'user' => $staff,
+                    'token' => $token,
+                    'token_type' => 'Bearer',
+                    'abilities' => ['business:*']
+                ]
+            ]);
+        }
+
+        throw ValidationException::withMessages([
+            'email' => ['The provided credentials are incorrect.'],
         ]);
     }
 

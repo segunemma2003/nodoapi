@@ -40,7 +40,7 @@ class BusinessController extends Controller
      */
     public function dashboard()
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -124,7 +124,7 @@ class BusinessController extends Controller
      */
     public function createVendor(Request $request)
 {
-    $business = Auth::user();
+    $business = \App\Support\BusinessContext::current();
     if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
@@ -220,7 +220,7 @@ class BusinessController extends Controller
      */
     public function updateVendor(Request $request, Vendor $vendor)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -281,7 +281,7 @@ class BusinessController extends Controller
      */
      public function createPurchaseOrder(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -504,7 +504,7 @@ class BusinessController extends Controller
      */
   public function submitPayment(Request $request, PurchaseOrder $po)
 {
-    $business = Auth::user();
+    $business = \App\Support\BusinessContext::current();
     if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
@@ -633,7 +633,7 @@ class BusinessController extends Controller
      */
     public function getPaymentHistory(PurchaseOrder $po)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -682,7 +682,7 @@ class BusinessController extends Controller
      */
     public function getCreditStatus()
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -753,7 +753,7 @@ class BusinessController extends Controller
      */
     public function getSpendingAnalysis()
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -839,7 +839,7 @@ class BusinessController extends Controller
      */
     public function getPendingPayments()
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -903,7 +903,7 @@ class BusinessController extends Controller
      */
     public function getVendors(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -982,7 +982,7 @@ class BusinessController extends Controller
      */
     public function deleteVendor(Vendor $vendor)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -1105,7 +1105,7 @@ class BusinessController extends Controller
      */
     public function getPurchaseOrders(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -1145,7 +1145,7 @@ class BusinessController extends Controller
      */
     public function getSpendingSuggestions()
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -1229,7 +1229,7 @@ class BusinessController extends Controller
  */
 public function getPurchaseTracker(Request $request)
 {
-    $business = Auth::user();
+    $business = \App\Support\BusinessContext::current();
     if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
@@ -1420,7 +1420,7 @@ public function getPurchaseTracker(Request $request)
  */
 public function getPurchaseTrends(Request $request)
 {
-    $business = Auth::user();
+    $business = \App\Support\BusinessContext::current();
     if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
@@ -1503,7 +1503,7 @@ public function getPurchaseTrends(Request $request)
  */
 public function getProfile()
 {
-    $business = Auth::user();
+    $business = \App\Support\BusinessContext::current();
     if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
@@ -1567,7 +1567,7 @@ public function getProfile()
  */
 public function updateProfile(Request $request)
 {
-    $business = Auth::user();
+    $business = \App\Support\BusinessContext::current();
     if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
@@ -1667,7 +1667,7 @@ public function updateProfile(Request $request)
  */
 public function uploadLogo(Request $request)
 {
-    $business = Auth::user();
+    $business = \App\Support\BusinessContext::current();
     if(!$business || !($business instanceof Business)) {
         return response()->json([
             'success' => false,
@@ -1731,7 +1731,7 @@ public function uploadLogo(Request $request)
  */
  public function getPurchaseOrder(PurchaseOrder $po)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -1780,7 +1780,7 @@ public function uploadLogo(Request $request)
      */
     public function getSyncedProducts(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -1891,7 +1891,7 @@ public function uploadLogo(Request $request)
      */
     public function getCreditPlan(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -1939,7 +1939,7 @@ public function uploadLogo(Request $request)
      */
     public function getWallet(\App\Services\WalletService $walletService)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -1969,7 +1969,7 @@ public function uploadLogo(Request $request)
      */
     public function payPurchaseOrderFromWallet(PurchaseOrder $po, \App\Services\WalletService $walletService)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if (!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
@@ -2066,7 +2066,7 @@ public function uploadLogo(Request $request)
      */
     public function testBankVerification(Request $request)
     {
-        $business = Auth::user();
+        $business = \App\Support\BusinessContext::current();
         if(!$business || !($business instanceof Business)) {
             return response()->json([
                 'success' => false,
