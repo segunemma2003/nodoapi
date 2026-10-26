@@ -2589,11 +2589,11 @@ public function rejectBusinessRepayment(Request $request, Business $business, Pa
 /**
  * Calculate risk level for business
  */
-private function calculateRiskLevel(Business $business)
+private function calculateRiskLevel(Business $business, ?float $paymentScore = null, ?int $overdueCount = null)
 {
     $utilization = $business->getCreditUtilization();
-    $paymentScore = $business->getPaymentScore();
-    $overdueCount = $business->purchaseOrders()->overdue()->count();
+    $paymentScore = $paymentScore ?? $business->getPaymentScore();
+    $overdueCount = $overdueCount ?? $business->purchaseOrders()->overdue()->count();
 
     if ($utilization > 90 || $paymentScore < 60 || $overdueCount > 5) {
         return 'high';
@@ -2738,7 +2738,25 @@ public function updateAdminProfile(Request $request)
  */
 public function getBusinessesEnhanced(Request $request)
 {
-    $query = Business::with(['riskTier', 'createdBy']);
+    $query = Business::with(['riskTier', 'createdBy'])
+        ->withCount([
+            'purchaseOrders as total_pos_count',
+            'purchaseOrders as pending_pos_count' => function ($q) {
+                $q->where('purchase_orders.status', 'pending');
+            },
+            'purchaseOrders as overdue_pos_count' => function ($q) {
+                $q->overdue();
+            },
+            'directPayments as pending_payments_agg_count' => function ($q) {
+                $q->where('payments.status', 'pending');
+            },
+        ])
+        ->withSum('purchaseOrders as total_spent_sum', 'net_amount')
+        ->withSum(['directPayments as total_repaid_sum' => function ($q) {
+            $q->where('payments.status', 'confirmed');
+        }], 'amount')
+        ->withMax('purchaseOrders as last_po_activity', 'created_at')
+        ->withMax('directPayments as last_payment_activity', 'created_at');
 
     // Filters
     if ($request->filled('status')) {
@@ -2756,18 +2774,16 @@ public function getBusinessesEnhanced(Request $request)
 
     $businesses = $query->orderBy('created_at', 'desc')->paginate(20);
 
-    // Enhanced business data with comprehensive metrics
+    // Enhanced business data with comprehensive metrics. Counts/sums/max-dates
+    // come pre-aggregated from the query above (one query for the whole page,
+    // not one per business) — only payment_score still needs a per-row query.
     $businesses->getCollection()->transform(function ($business) {
-        // Calculate metrics safely with qualified column names
-        $totalPOs = $business->purchaseOrders()->count();
-
-        // Use separate queries to avoid ambiguity
-        $lastPOActivity = $business->purchaseOrders()->latest('created_at')->first()?->created_at;
-        $lastPaymentActivity = $business->directPayments()->latest('created_at')->first()?->created_at;
+        $lastPOActivity = $business->last_po_activity ? \Carbon\Carbon::parse($business->last_po_activity) : null;
+        $lastPaymentActivity = $business->last_payment_activity ? \Carbon\Carbon::parse($business->last_payment_activity) : null;
 
         $lastActivity = null;
         if ($lastPOActivity && $lastPaymentActivity) {
-            $lastActivity = max($lastPOActivity, $lastPaymentActivity);
+            $lastActivity = $lastPOActivity->greaterThan($lastPaymentActivity) ? $lastPOActivity : $lastPaymentActivity;
         } elseif ($lastPOActivity) {
             $lastActivity = $lastPOActivity;
         } elseif ($lastPaymentActivity) {
@@ -2776,30 +2792,27 @@ public function getBusinessesEnhanced(Request $request)
             $lastActivity = $business->updated_at;
         }
 
+        $paymentScore = $business->getPaymentScore();
+        $overdueCount = (int) $business->overdue_pos_count;
+
         $business->enhanced_metrics = [
             'current_balance' => $business->current_balance,
             'available_balance' => $business->available_balance,
             'credit_balance' => $business->credit_balance,
             'credit_utilization' => $business->getCreditUtilization(),
             'spending_power_utilization' => $business->getSpendingPowerUtilization(),
-            'payment_score' => $business->getPaymentScore(),
-            'total_pos' => $totalPOs,
-            'pending_pos' => $business->purchaseOrders()
-                ->where('purchase_orders.status', 'pending') // Qualified column name
-                ->count(),
-            'overdue_pos' => $business->purchaseOrders()->overdue()->count(),
-            'pending_payments' => $business->directPayments()
-                ->where('payments.status', 'pending') // Qualified column name
-                ->count(),
-            'total_spent' => $business->purchaseOrders()->sum('net_amount'),
-            'total_repaid' => $business->directPayments()
-                ->where('payments.status', 'confirmed') // Qualified column name
-                ->sum('amount'),
+            'payment_score' => $paymentScore,
+            'total_pos' => (int) $business->total_pos_count,
+            'pending_pos' => (int) $business->pending_pos_count,
+            'overdue_pos' => $overdueCount,
+            'pending_payments' => (int) $business->pending_payments_agg_count,
+            'total_spent' => (float) ($business->total_spent_sum ?? 0),
+            'total_repaid' => (float) ($business->total_repaid_sum ?? 0),
             'last_activity' => $lastActivity?->format('Y-m-d'),
             'days_since_activity' => $lastActivity ? now()->diffInDays($lastActivity) : null,
             'effective_interest_rate' => $business->getEffectiveInterestRate(),
             'potential_monthly_interest' => $business->calculatePotentialInterest(30),
-            'risk_level' => $this->calculateRiskLevel($business),
+            'risk_level' => $this->calculateRiskLevel($business, $paymentScore, $overdueCount),
         ];
 
         return $business;
