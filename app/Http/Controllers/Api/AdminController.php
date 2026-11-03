@@ -17,6 +17,7 @@ use App\Mail\PurchaseOrderRejected;
 use App\Mail\VendorApproved;
 use App\Mail\VendorRejected;
 use App\Models\BalanceTransaction;
+use App\Services\PaymentAlertService;
 use App\Services\PaystackService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -1109,6 +1110,8 @@ public function approvePurchaseOrder(Request $request, PurchaseOrder $po)
         ]);
 
         if (!$paymentResult['success']) {
+            PaymentAlertService::notify($po, 'not_initiated', $paymentResult['error'] ?? 'Unknown payment error');
+
             // If payment fails, revert the approval
             $po->update([
                 'status' => 'pending',

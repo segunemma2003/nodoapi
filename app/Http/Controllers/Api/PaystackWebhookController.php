@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\PaymentAlertService;
 use App\Services\PaystackService;
 use App\Services\WalletService;
 use App\Models\Business;
@@ -139,10 +140,11 @@ class PaystackWebhookController extends Controller
             return;
         }
 
-        // Update PO status - might need admin attention
+        // Record it on the PO. The status is left alone: 'payment_failed' isn't
+        // an allowed PO status, and writing it made this update throw, so the
+        // failure was never recorded or alerted on.
         $po->update([
-            'status' => 'payment_failed',
-            'notes' => ($po->notes ?? '') . "\nPayment failed via Paystack: " . ($transferData['failure_reason'] ?? 'Unknown reason'),
+            'notes' => ($po->notes ?? '') . "\nPayment failed via Paystack on " . now()->format('Y-m-d H:i:s') . ": " . ($transferData['failure_reason'] ?? 'Unknown reason'),
         ]);
 
         Log::error('Transfer failed for PO', [
@@ -152,8 +154,12 @@ class PaystackWebhookController extends Controller
             'failure_reason' => $transferData['failure_reason'] ?? 'Unknown'
         ]);
 
-        // Notify admin about failed payment
-        $this->notifyTransferFailure($po, $transferData);
+        PaymentAlertService::notify(
+            $po,
+            'failed',
+            $transferData['failure_reason'] ?? 'Paystack did not give a reason',
+            $reference
+        );
     }
 
     /**
@@ -183,6 +189,13 @@ class PaystackWebhookController extends Controller
             'po_number' => $po->po_number,
             'transfer_reference' => $reference
         ]);
+
+        PaymentAlertService::notify(
+            $po,
+            'reversed',
+            $transferData['reason'] ?? 'The bank reversed the transfer; the money went back to the Paystack balance',
+            $reference
+        );
     }
 
     /**
@@ -236,23 +249,5 @@ class PaystackWebhookController extends Controller
     {
         // You can implement additional success notifications here
         // For example, SMS to vendor, push notification to business app, etc.
-    }
-
-    /**
-     * Notify about failed transfer - requires admin attention
-     */
-    private function notifyTransferFailure($po, $transferData)
-    {
-        // Notify admin about failed payment that needs attention
-        // You can send email to admin or create a support ticket
-
-        Log::critical('Purchase Order payment failed - Admin attention required', [
-            'po_id' => $po->id,
-            'po_number' => $po->po_number,
-            'business_name' => $po->business->name,
-            'vendor_name' => $po->vendor->name,
-            'amount' => $po->net_amount,
-            'failure_reason' => $transferData['failure_reason'] ?? 'Unknown'
-        ]);
     }
 }

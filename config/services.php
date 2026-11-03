@@ -52,4 +52,10 @@ return [
         'key' => env('INVENTORY_API_KEY'),
     ],
 
+    // Who gets emailed when a vendor payment fails or is reversed.
+    // Comma-separated, e.g. PAYMENT_ALERT_EMAILS="support@foodstuff.store,finance@foodstuff.store"
+    'payment_alerts' => [
+        'emails' => array_values(array_filter(array_map('trim', explode(',', env('PAYMENT_ALERT_EMAILS', 'support@foodstuff.store'))))),
+    ],
+
 ];
