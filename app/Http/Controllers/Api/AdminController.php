@@ -2873,7 +2873,12 @@ public function getBusinessesEnhanced(Request $request)
  */
 public function getVendors(Request $request)
 {
-    $query = Vendor::with(['business', 'approvedBy', 'rejectedBy']);
+    // Approved spend: what we've committed to each vendor through POs that
+    // were approved (or have since been completed).
+    $approved = fn ($q) => $q->whereIn('status', ['approved', 'completed']);
+    $query = Vendor::with(['business', 'approvedBy', 'rejectedBy'])
+        ->withCount(['purchaseOrders as approved_orders_count' => $approved])
+        ->withSum(['purchaseOrders as approved_spend' => $approved], 'net_amount');
 
     // Filters
     if ($request->filled('status')) {
@@ -3273,6 +3278,7 @@ public function rejectVendor(Request $request, Vendor $vendor)
                 'total_amount' => $vendor->purchaseOrders()->sum('net_amount'),
                 'pending_orders' => $vendor->purchaseOrders()->where('status', 'pending')->count(),
                 'approved_orders' => $vendor->purchaseOrders()->where('status', 'approved')->count(),
+                'approved_spend' => (float) $vendor->purchaseOrders()->whereIn('status', ['approved', 'completed'])->sum('net_amount'),
             ]
         ]
     ]);
