@@ -10,6 +10,7 @@ use App\Models\PurchaseOrder;
 use App\Models\Payment;
 use App\Models\Vendor;
 use App\Models\SystemSetting;
+use App\Models\SyncedProduct;
 use App\Mail\BusinessCredentials;
 use App\Mail\PurchaseOrderApproved;
 use App\Mail\PurchaseOrderRejected;
@@ -930,6 +931,7 @@ public function getPurchaseOrders(Request $request)
         $po->accrued_interest = $po->calculateAccruedInterest();
         return $po;
     });
+    $this->fillItemUnits($purchaseOrders->getCollection());
 
     return response()->json([
         'success' => true,
@@ -946,6 +948,36 @@ public function getPurchaseOrders(Request $request)
 }
 
 /**
+ * POs created before the unit of measure was saved on each item have no
+ * `unit`, so look it up from the synced product catalog for display.
+ * Only touches the in-memory models; nothing is written back.
+ */
+private function fillItemUnits($purchaseOrders): void
+{
+    $missingIds = $purchaseOrders
+        ->flatMap(fn ($po) => collect($po->items ?? []))
+        ->filter(fn ($item) => empty($item['unit']) && !empty($item['inventory_product_id']))
+        ->pluck('inventory_product_id')
+        ->unique()
+        ->values();
+
+    $units = $missingIds->isEmpty() ? collect() : SyncedProduct::whereIn('inventory_product_id', $missingIds)
+        ->pluck('unit_of_measure', 'inventory_product_id');
+
+    foreach ($purchaseOrders as $po) {
+        if (!$po->items) {
+            continue;
+        }
+        $po->items = collect($po->items)->map(function ($item) use ($units) {
+            if (empty($item['unit'])) {
+                $item['unit'] = $units->get($item['inventory_product_id'] ?? null);
+            }
+            return $item;
+        })->all();
+    }
+}
+
+/**
  * @OA\Get(
  *     path="/api/admin/purchase-orders/{po}",
  *     summary="Get specific purchase order details",
@@ -957,6 +989,7 @@ public function getPurchaseOrders(Request $request)
 public function getPurchaseOrderDetails(PurchaseOrder $po)
 {
     $po->load(['business', 'vendor', 'approvedBy', 'payments.confirmedBy', 'payments.rejectedBy']);
+    $this->fillItemUnits(collect([$po]));
 
     return response()->json([
         'success' => true,
@@ -2853,7 +2886,10 @@ public function getVendors(Request $request)
         $query->where('category', 'like', '%' . $request->category . '%');
     }
 
-    $vendors = $query->orderBy('created_at', 'desc')->paginate(20);
+    // The admin portal pages through vendors itself, so send every vendor
+    // unless a page size is explicitly requested.
+    $perPage = $request->integer('per_page') ?: max((clone $query)->count(), 1);
+    $vendors = $query->orderBy('created_at', 'desc')->paginate($perPage);
 
     return response()->json([
         'success' => true,

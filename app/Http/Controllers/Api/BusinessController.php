@@ -369,6 +369,7 @@ class BusinessController extends Controller
             }
 
             $mapped['synced_price'] = (float) $synced->cost_price;
+            $mapped['unit'] = $synced->unit_of_measure ?? null;
             if ((float) $item['unit_price'] > (float) $synced->cost_price) {
                 $priceErrors["items.{$index}.unit_price"] = "Unit price (" . $item['unit_price'] . ") exceeds the invoicing system's price for \"{$synced->product_name}\" (" . $synced->cost_price . ")";
             } elseif ((float) $item['unit_price'] < (float) $synced->cost_price) {
