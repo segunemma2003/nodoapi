@@ -52,9 +52,19 @@ return [
 
     'channels' => [
 
+        // Sends every warning/error log entry to Sentry as an issue (no-op without a DSN)
+        'sentry' => [
+            'driver' => 'sentry',
+            'level' => env('LOG_SENTRY_LEVEL', 'warning'),
+            'bubble' => true,
+            // Unhandled exceptions already go to Sentry via Integration::handles() in
+            // bootstrap/app.php; skip them here so they aren't reported twice.
+            'report_exceptions' => false,
+        ],
+
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', env('LOG_STACK', 'single')),
+            'channels' => explode(',', env('LOG_STACK', 'single,sentry')),
             'ignore_exceptions' => false,
         ],
 

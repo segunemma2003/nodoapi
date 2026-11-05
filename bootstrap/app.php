@@ -43,5 +43,8 @@ return Application::configure(basePath: dirname(__DIR__))
     \App\Console\Commands\InterestRateFrequencyCommand::class,
 ])
     ->withExceptions(function (Exceptions $exceptions) {
+        // Report unhandled exceptions to Sentry (no-op unless SENTRY_LARAVEL_DSN is set)
+        \Sentry\Laravel\Integration::handles($exceptions);
+
         //
     })->create();
